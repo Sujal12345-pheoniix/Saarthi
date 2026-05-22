@@ -33,7 +33,7 @@ export default function DashboardOverview() {
           Good morning, {user?.firstName || "Explorer"}! 👋
         </h1>
         <p className="text-slate-600 dark:text-slate-400">
-          Here is your daily wellness summary. Let's make today a great day.
+          Here is your daily wellness summary. Let&apos;s make today a great day.
         </p>
       </div>
 
@@ -104,7 +104,7 @@ export default function DashboardOverview() {
             <div>
               <Brain className="w-8 h-8 mb-4 opacity-80" />
               <p className="text-lg font-medium leading-relaxed mb-6">
-                "Your stress levels are slightly elevated. Try maintaining a fixed sleep cycle and taking a 5-minute breathing break this afternoon."
+                &ldquo;Your stress levels are slightly elevated. Try maintaining a fixed sleep cycle and taking a 5-minute breathing break this afternoon.&rdquo;
               </p>
             </div>
             <Link href="/dashboard/ai" className="inline-flex items-center text-sm font-semibold hover:opacity-80 transition-opacity">

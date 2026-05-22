@@ -43,20 +43,19 @@ const defaultForm = {
 export default function SkinReportView() {
   const [form, setForm] = useState(defaultForm);
   const [file, setFile] = useState<File | null>(null);
-  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [report, setReport] = useState<SkinReport | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
 
+  const preview = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
+
   useEffect(() => {
-    const preview = file ? URL.createObjectURL(file) : null;
-    setUploadedImage(preview);
     return () => {
       if (preview) {
         URL.revokeObjectURL(preview);
       }
     };
-  }, [file]);
+  }, [preview]);
 
   useEffect(() => {
     let active = true;
@@ -142,7 +141,6 @@ export default function SkinReportView() {
 
       setReport(data.report);
       setFile(null);
-      setUploadedImage(imageUrl);
     } catch (error) {
       console.error(error);
       alert(error instanceof Error ? error.message : "Something went wrong.");
@@ -276,9 +274,9 @@ export default function SkinReportView() {
                     <p className="text-sm text-slate-500 dark:text-slate-400">Saved to Cloudinary for scan comparison and trend history.</p>
                   </div>
                 </div>
-                {(uploadedImage || report?.imageUrl) && (
+                {(preview || report?.imageUrl) && (
                   <div className="mt-4 overflow-hidden rounded-2xl border border-white/30">
-                    <img src={uploadedImage || report?.imageUrl || undefined} alt="Skin preview" className="h-56 w-full object-cover" />
+                    <img src={preview || report?.imageUrl || undefined} alt="Skin preview" className="h-56 w-full object-cover" />
                   </div>
                 )}
               </label>
@@ -503,7 +501,6 @@ export default function SkinReportView() {
                     onClick={() => {
                       setReport(null);
                       setFile(null);
-                      setUploadedImage(null);
                     }}
                     className="inline-flex items-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:scale-[1.01] dark:bg-white dark:text-slate-950"
                   >

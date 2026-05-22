@@ -10,7 +10,6 @@ import {
   CheckCircle2,
   ImagePlus,
   ChevronRight,
-  Moon,
   RefreshCw,
   Sparkles,
   Trophy,
@@ -51,21 +50,19 @@ function formatBmi(heightCm: number, weightKg: number) {
 export default function PhysicalReportView() {
   const [form, setForm] = useState(defaultForm);
   const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
   const [report, setReport] = useState<PhysicalReport | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
 
-  useEffect(() => {
-    const localPreview = file ? URL.createObjectURL(file) : null;
-    setPreview(localPreview);
+  const preview = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
 
+  useEffect(() => {
     return () => {
-      if (localPreview) {
-        URL.revokeObjectURL(localPreview);
+      if (preview) {
+        URL.revokeObjectURL(preview);
       }
     };
-  }, [file]);
+  }, [preview]);
 
   useEffect(() => {
     fetch("/api/reports/physical")
@@ -128,7 +125,6 @@ export default function PhysicalReportView() {
 
       setReport(data.report);
       setFile(null);
-      setPreview(imageUrl);
     } catch (error) {
       console.error(error);
       alert(error instanceof Error ? error.message : "Something went wrong.");
