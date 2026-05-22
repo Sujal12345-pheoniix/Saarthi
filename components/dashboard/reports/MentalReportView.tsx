@@ -15,6 +15,8 @@ import {
   ShieldAlert,
   WandSparkles,
   Activity,
+  CheckCircle2,
+  ChevronRight,
 } from "lucide-react";
 
 type MentalReport = {
