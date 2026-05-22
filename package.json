@@ -9,9 +9,24 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@clerk/nextjs": "^7.4.0",
+    "@google/genai": "^2.6.0",
+    "@prisma/client": "^7.8.0",
+    "@uploadthing/react": "^7.3.3",
+    "cloudinary": "^2.10.0",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.40.0",
+    "lucide-react": "^1.16.0",
+    "mongoose": "^9.6.2",
     "next": "16.2.6",
+    "prisma": "^7.8.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "recharts": "^3.8.1",
+    "tailwind-merge": "^3.6.0",
+    "tailwindcss-animate": "^1.0.7",
+    "uploadthing": "^7.7.4",
+    "zustand": "^5.0.13"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
