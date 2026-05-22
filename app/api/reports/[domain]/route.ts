@@ -12,21 +12,15 @@ export const runtime = "nodejs";
 async function ensureDatabaseUser() {
   // Local dev helper: allow anonymous access when explicitly enabled.
   if (process.env.DEV_ALLOW_ANON === "true") {
-    const devId = "dev_local_user";
-    return prisma.user.upsert({
-      where: { clerkId: devId },
-      create: {
-        clerkId: devId,
-        email: process.env.DEV_EMAIL ?? "dev@localhost",
-        name: "Dev Local",
-        imageUrl: null,
-      },
-      update: {
-        email: process.env.DEV_EMAIL ?? "dev@localhost",
-        name: "Dev Local",
-        imageUrl: null,
-      },
-    });
+    // Return a lightweight in-memory user object for local testing so we
+    // don't touch the database or construct Prisma at all.
+    return {
+      id: "dev_local_id",
+      clerkId: "dev_local_user",
+      email: process.env.DEV_EMAIL ?? "dev@localhost",
+      name: "Dev Local",
+      imageUrl: null,
+    } as any;
   }
 
   const { userId } = await auth();
