@@ -33,11 +33,22 @@ export async function POST(request: Request) {
   const file = formData.get("file");
   const folder = String(formData.get("folder") ?? "saarthi-wellness");
 
-  if (!(file instanceof File)) {
+  if (!file) {
     return Response.json({ error: "A file is required." }, { status: 400 });
   }
 
-  const bytes = Buffer.from(await file.arrayBuffer());
+  // Accept browser `File` and Node/undici `Blob`-like values that implement
+  // `arrayBuffer()` so the route works from both browser fetch and server-side
+  // Node scripts used for testing.
+  let bytes: Buffer;
+  if (file instanceof File) {
+    bytes = Buffer.from(await file.arrayBuffer());
+  } else if (typeof (file as any)?.arrayBuffer === "function") {
+    bytes = Buffer.from(await (file as any).arrayBuffer());
+  } else {
+    return Response.json({ error: "A file is required." }, { status: 400 });
+  }
+
   const upload = await uploadStream(bytes, folder);
 
   return Response.json({ url: upload.secure_url, publicId: upload.public_id });

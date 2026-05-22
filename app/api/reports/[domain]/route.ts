@@ -10,6 +10,25 @@ import {
 export const runtime = "nodejs";
 
 async function ensureDatabaseUser() {
+  // Local dev helper: allow anonymous access when explicitly enabled.
+  if (process.env.DEV_ALLOW_ANON === "true") {
+    const devId = "dev_local_user";
+    return prisma.user.upsert({
+      where: { clerkId: devId },
+      create: {
+        clerkId: devId,
+        email: process.env.DEV_EMAIL ?? "dev@localhost",
+        name: "Dev Local",
+        imageUrl: null,
+      },
+      update: {
+        email: process.env.DEV_EMAIL ?? "dev@localhost",
+        name: "Dev Local",
+        imageUrl: null,
+      },
+    });
+  }
+
   const { userId } = await auth();
 
   if (!userId) {
@@ -79,6 +98,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ dom
         : domain === "physical"
           ? generatePhysicalReport(body)
           : generateMentalReport(body);
+
+    // In local dev smoke-test mode, skip database persistence so the
+    // report can be generated without a working Prisma client.
+    if (process.env.DEV_ALLOW_ANON === "true") {
+      return Response.json({ report, saved: null });
+    }
 
     const saved =
       domain === "skin"
