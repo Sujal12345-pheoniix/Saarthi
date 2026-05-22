@@ -347,7 +347,7 @@ export default function PhysicalReportView() {
 
                   <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm leading-6 text-amber-900 dark:text-amber-100">{report.caution}</div>
 
-                  <button type="button" onClick={() => { setReport(null); setFile(null); setPreview(null); }} className="inline-flex items-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:scale-[1.01] dark:bg-white dark:text-slate-950">
+                  <button type="button" onClick={() => { setReport(null); setFile(null); }} className="inline-flex items-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:scale-[1.01] dark:bg-white dark:text-slate-950">
                     <RefreshCw className="h-4 w-4" /> Run another analysis
                   </button>
                 </div>
