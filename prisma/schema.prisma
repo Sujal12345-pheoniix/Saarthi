@@ -1,71 +1,108 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
+  provider   = "postgresql"
+  extensions = [vector]
 }
 
 model User {
-  id             String           @id @default(cuid())
-  clerkId        String           @unique
-  email          String?
-  name           String?
-  imageUrl       String?
-
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
-  skinReport     SkinReport?
-  physicalReport PhysicalReport?
-  mentalReport   MentalReport?
+  id                     String                   @id @default(cuid())
+  clerkId                String                   @unique
+  email                  String?
+  name                   String?
+  imageUrl               String?
+  age                    Int?
+  gender                 String?
+  lifestyle              String?
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+  skinAnalyses           SkinAnalysis[]
+  mentalHealthAnalyses   MentalHealthAnalysis[]
+  physicalHealthAnalyses PhysicalHealthAnalysis[]
+  wellnessReports        CombinedWellnessReport[]
+  dailyHabits            DailyHabits[]
+  conversations          AIConversation[]
 }
 
-model SkinReport {
+model SkinAnalysis {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  imageUrl            String?
+  acneScore           Int
+  drynessScore        Int
+  oilinessScore       Int
+  pigmentationScore   Int
+  confidence          Float
+  aiSummary           String
+  recommendations     Json
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model MentalHealthAnalysis {
   id              String   @id @default(cuid())
-  userId          String   @unique
+  userId          String
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  imageUrl        String?
-  score           Int
-  confidence      Int
-  summary         String
-  findings        String[]
-  recommendations String[]
-  activities      String[]
-  metrics         Json
-  caution         String
+  stressLevel     Int
+  anxietyLevel    Int
+  moodScore       Int
+  sleepScore      Int
+  burnoutRisk     Int
+  aiSummary       String
+  recommendations Json
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
 
-model PhysicalReport {
+model PhysicalHealthAnalysis {
   id              String   @id @default(cuid())
-  userId          String   @unique
+  userId          String
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  imageUrl        String?
-  score           Int
-  confidence      Int
-  summary         String
-  findings        String[]
-  recommendations String[]
-  activities      String[]
-  metrics         Json
-  caution         String
+  bmi             Float?
+  hydration       Int
+  fitnessScore    Int
+  activityLevel   String
+  sleepHours      Float
+  aiSummary       String
+  recommendations Json
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
 
-model MentalReport {
-  id              String   @id @default(cuid())
-  userId          String   @unique
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  score           Int
-  confidence      Int
-  summary         String
-  findings        String[]
-  recommendations String[]
-  activities      String[]
-  metrics         Json
-  caution         String
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+model CombinedWellnessReport {
+  id                 String   @id @default(cuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  overallHealthScore Int
+  aiInsights         String
+  risks              Json
+  actionPlan         Json
+  generatedAt        DateTime @default(now())
+}
+
+model DailyHabits {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date        DateTime @default(now())
+  waterIntake Int
+  steps       Int
+  sleep       Float
+  exercise    Int // in minutes
+  mood        Int
+}
+
+model AIConversation {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String // 'user' or 'ai'
+  message   String
+  // Using pgvector
+  embedding Unsupported("vector(1536)")?
+  timestamp DateTime @default(now())
 }

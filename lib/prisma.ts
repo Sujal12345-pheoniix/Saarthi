@@ -1,4 +1,6 @@
 import { PrismaClient } from "@prisma/client";
+import { Pool } from 'pg';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 declare global {
   // eslint-disable-next-line vars-on-top
@@ -20,7 +22,9 @@ function createPrismaClient(): PrismaClient {
     console.log(`[prisma] Constructing PrismaClient, DATABASE_URL=${hint}...`);
   } catch {}
 
-  _prisma = new PrismaClient();
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const adapter = new PrismaPg(pool);
+  _prisma = new PrismaClient({ adapter });
   if (process.env.NODE_ENV !== "production") globalThis.prisma = _prisma;
   return _prisma;
 }
