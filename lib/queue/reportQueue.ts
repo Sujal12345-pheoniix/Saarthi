@@ -1,10 +1,45 @@
+import Redis from 'ioredis';
 import { Queue } from 'bullmq';
-import { connection } from './redis';
 
-export const reportQueue = new Queue('report-generation', { connection });
+let reportQueue: Queue | null = null;
 
-export async function enqueueReportGeneration(jobData: any) {
-  return await reportQueue.add('generate-report', jobData, {
+function getReportQueue() {
+  if (!process.env.REDIS_URL) {
+    return null;
+  }
+
+  if (!reportQueue) {
+    const connection = new Redis(process.env.REDIS_URL, {
+      maxRetriesPerRequest: null,
+    });
+
+    reportQueue = new Queue('report-generation', {
+      connection,
+    });
+  }
+
+  return reportQueue;
+}
+
+export type ReportJobData = {
+  userId: string;
+  data: {
+    imageUrl?: string;
+    skinQuestionnaire?: Record<string, unknown>;
+    moodData?: Record<string, unknown>;
+    journalEntries?: string[];
+    physicalData?: Record<string, unknown>;
+  };
+};
+
+export async function enqueueReportGeneration(jobData: ReportJobData) {
+  const queue = getReportQueue();
+
+  if (!queue) {
+    return { id: `local-${Date.now()}` };
+  }
+
+  return await queue.add('generate-report', jobData, {
     removeOnComplete: true,
     removeOnFail: false,
   });

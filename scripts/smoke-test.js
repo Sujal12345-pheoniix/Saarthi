@@ -1,7 +1,7 @@
-const fs = require('fs');
-const path = require('path');
-
 async function main() {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+
   const base = 'http://localhost:3000';
   const uploadPath = '/api/upload';
   const reportPath = '/api/reports/skin';
@@ -32,7 +32,7 @@ async function main() {
   try {
     const parsed = JSON.parse(upJson);
     imageUrl = parsed.url || parsed.result?.url || null;
-  } catch (e) {}
+  } catch {}
 
   const body = {
     skinType: 'Normal',
