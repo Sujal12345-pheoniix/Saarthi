@@ -62,12 +62,18 @@ export async function generateStructuredAIResponse<T>(
   const responseText = await response.text();
 
   if (!response.ok) {
-    throw new Error(`NVIDIA DeepSeek request failed (${response.status}): ${responseText}`);
+    throw new Error(`AI provider request failed (${response.status}): ${responseText}`);
   }
 
-  const payload = JSON.parse(responseText) as {
-    choices?: Array<{ message?: { content?: string }; text?: string }>;
-  };
+  let payload: { choices?: Array<{ message?: { content?: string }; text?: string }> } | null = null;
+  try {
+    payload = JSON.parse(responseText) as { choices?: Array<{ message?: { content?: string }; text?: string }> };
+  } catch (err) {
+    // If the provider returned non-JSON (for example an error message like
+    // "Request Entity Too Large"), surface a clear error rather than
+    // letting JSON.parse throw an opaque exception upstream.
+    throw new Error(`AI provider returned non-JSON response (${response.status}): ${responseText.slice(0, 1000)}`);
+  }
 
   const content = payload.choices?.[0]?.message?.content || payload.choices?.[0]?.text || '';
 

@@ -92,7 +92,13 @@ export default function PhysicalReportView() {
         method: "POST",
         body: formData,
       });
-      const data = await response.json();
+      const responseText = await response.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        data = { error: responseText };
+      }
 
       if (!response.ok) {
         throw new Error(data?.error || "Unable to upload image.");

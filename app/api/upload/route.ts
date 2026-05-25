@@ -49,6 +49,12 @@ export async function POST(request: Request) {
     return Response.json({ error: "A file is required." }, { status: 400 });
   }
 
+  // Basic server-side size guard to avoid upstream platform errors.
+  const MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+  if (bytes.length > MAX_BYTES) {
+    return Response.json({ error: `File too large. Max ${Math.round(MAX_BYTES / 1024 / 1024)}MB allowed.` }, { status: 413 });
+  }
+
   const upload = await uploadStream(bytes, folder);
 
   return Response.json({ url: upload.secure_url, publicId: upload.public_id });
