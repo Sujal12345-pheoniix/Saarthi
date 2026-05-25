@@ -209,21 +209,46 @@ async function ensureDatabaseUser(): Promise<DatabaseUser> {
   }
 
   const profile = await currentUser();
+  try {
+    return await prisma.user.upsert({
+      where: { clerkId: userId },
+      create: {
+        clerkId: userId,
+        email: profile?.emailAddresses[0]?.emailAddress ?? null,
+        name: [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || profile?.username || null,
+        imageUrl: profile?.imageUrl ?? null,
+      },
+      update: {
+        email: profile?.emailAddresses[0]?.emailAddress ?? null,
+        name: [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || profile?.username || null,
+        imageUrl: profile?.imageUrl ?? null,
+      },
+    });
+  } catch (err: any) {
+    const msg = typeof err === 'string' ? err : err?.message ?? String(err);
+    // Common case when the database schema hasn't been pushed/migrated yet.
+    if (msg.includes('does not exist') || msg.includes('relation') || msg.includes('no such table')) {
+      console.error('[reports] Database table missing or schema not applied:', msg);
+      // If DEV_ALLOW_ANON is explicitly enabled, fall back to an in-memory user.
+      if (process.env.DEV_ALLOW_ANON === 'true' || process.env.NODE_ENV !== 'production') {
+        return {
+          id: 'dev_local_id',
+          clerkId: 'dev_local_user',
+          email: process.env.DEV_EMAIL ?? 'dev@localhost',
+          name: 'Dev Local',
+          imageUrl: null,
+        };
+      }
 
-  return prisma.user.upsert({
-    where: { clerkId: userId },
-    create: {
-      clerkId: userId,
-      email: profile?.emailAddresses[0]?.emailAddress ?? null,
-      name: [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || profile?.username || null,
-      imageUrl: profile?.imageUrl ?? null,
-    },
-    update: {
-      email: profile?.emailAddresses[0]?.emailAddress ?? null,
-      name: [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || profile?.username || null,
-      imageUrl: profile?.imageUrl ?? null,
-    },
-  });
+      // Otherwise, return a clear error so the deployer knows to run migrations.
+      throw new Error(
+        'Database schema appears to be missing. Run `npx prisma db push` or apply migrations to the target database, and ensure `DATABASE_URL` points to the correct database.'
+      );
+    }
+
+    // Re-throw unknown errors
+    throw err;
+  }
 }
 
 function domainIsValid(value: string): value is WellnessDomain {
