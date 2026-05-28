@@ -16,6 +16,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Saarthi - AI Wellness Companion",
   description: "Your intelligent personal wellness companion analyzing Skin, Mental, and Physical health.",
+  icons: {
+    icon: '/saarthi-logo.png',
+    shortcut: '/saarthi-logo.png',
+    apple: '/saarthi-logo.png',
+  },
 };
 
 export default function RootLayout({

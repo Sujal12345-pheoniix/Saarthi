@@ -282,7 +282,7 @@ export default function SkinReportView() {
                 </div>
                 {(preview || report?.imageUrl) && (
                   <div className="mt-4 overflow-hidden rounded-2xl border border-white/30">
-                    <img src={preview || report?.imageUrl || undefined} alt="Skin preview" className="h-56 w-full object-cover" />
+                    <img src={preview || report?.imageUrl || '/saarthi-logo.png'} alt="Skin preview" className="h-56 w-full object-cover" />
                   </div>
                 )}
               </label>

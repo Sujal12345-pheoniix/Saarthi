@@ -241,7 +241,7 @@ export default function PhysicalReportView() {
                     <p className="text-sm text-slate-500 dark:text-slate-400">Use this to keep a visual record of your physical analysis.</p>
                   </div>
                 </div>
-                {(preview || report?.imageUrl) && <div className="mt-4 overflow-hidden rounded-2xl border border-white/30"><img src={preview || report?.imageUrl || undefined} alt="Physical preview" className="h-56 w-full object-cover" /></div>}
+                {(preview || report?.imageUrl) && <div className="mt-4 overflow-hidden rounded-2xl border border-white/30"><img src={preview || report?.imageUrl || '/saarthi-logo.png'} alt="Physical preview" className="h-56 w-full object-cover" /></div>}
               </label>
 
               <div className="grid gap-4 sm:grid-cols-2">
