@@ -18,6 +18,28 @@ function getAnalysisQueue() {
   return analysisQueue;
 }
 
+export type ReportJobData = {
+  userId: string;
+  data: {
+    imageUrl?: string;
+    skinQuestionnaire?: Record<string, unknown>;
+    moodData?: Record<string, unknown>;
+    journalEntries?: string[];
+    physicalData?: Record<string, unknown>;
+  };
+};
+
+export async function enqueueReportGeneration(jobData: ReportJobData) {
+  const queue = getAnalysisQueue();
+  if (!queue) {
+    return { id: `local-${Date.now()}` };
+  }
+  return await queue.add('report-generation', jobData, {
+    removeOnComplete: true,
+    removeOnFail: false,
+  });
+}
+
 export async function enqueueAnalysis(
   type: 'skin' | 'fitness',
   jobData: {
