@@ -61,20 +61,50 @@ export async function POST(request: Request) {
       },
     });
 
-    // 2. Enqueue BullMQ job
-    await enqueueAnalysis("skin", {
-      userId: user.id,
-      analysisId: analysis.id,
-      imageUrl,
-      questionnaire,
-    });
+    try {
+      // 2. Try to enqueue BullMQ job
+      await enqueueAnalysis("skin", {
+        userId: user.id,
+        analysisId: analysis.id,
+        imageUrl,
+        questionnaire,
+      });
 
-    return Response.json({
-      success: true,
-      analysisId: analysis.id,
-      status: analysis.status,
-      message: "Skin analysis successfully queued",
-    });
+      return Response.json({
+        success: true,
+        analysisId: analysis.id,
+        status: analysis.status,
+        message: "Skin analysis successfully queued",
+      });
+    } catch (queueError: any) {
+      console.warn("[api/analyze-skin] Redis queue is offline (ECONNREFUSED). Running direct analysis fallback.");
+      
+      // Update status to PROCESSING
+      await prisma.analysis.update({
+        where: { id: analysis.id },
+        data: { status: "PROCESSING" },
+      });
+
+      // Execute direct sync analysis
+      const { runDirectAnalysis } = await import("@/lib/ai/directAnalyzer");
+      const reportId = await runDirectAnalysis("skin", user.id, imageUrl, questionnaire);
+
+      // Update status to COMPLETED
+      await prisma.analysis.update({
+        where: { id: analysis.id },
+        data: {
+          status: "COMPLETED",
+          resultId: reportId,
+        },
+      });
+
+      return Response.json({
+        success: true,
+        analysisId: analysis.id,
+        status: "COMPLETED",
+        message: "Skin analysis completed synchronously",
+      });
+    }
   } catch (error: any) {
     console.error("Error in /api/analyze-skin:", error);
     const message = error.message || "Internal Server Error";
