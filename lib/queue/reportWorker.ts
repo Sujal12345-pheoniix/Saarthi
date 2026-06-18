@@ -1,61 +1,154 @@
 import { Worker } from 'bullmq';
-import type { Prisma } from '@prisma/client';
-import { connection } from './redis';
-import { AIOrchestrator } from '../ai/orchestrator';
 import { prisma } from '../prisma';
+import Redis from 'ioredis';
+
+const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+const connection = new Redis(redisUrl, {
+  maxRetriesPerRequest: null,
+});
+
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 
 declare global {
   var reportWorker: Worker | undefined;
 }
 
 const createReportWorker = () => new Worker(
-  'report-generation',
+  'analysis-queue',
   async (job) => {
-    const { userId, data } = job.data;
+    const { userId, analysisId, imageUrl, questionnaire } = job.data;
+    const type = job.name; // 'skin-analysis' or 'fitness-analysis'
 
-    // 1. Run the AI full analysis via orchestrator
-    const result = await AIOrchestrator.runFullAnalysis(data);
+    console.log(`[worker] Processing job ${job.id} for type: ${type}, analysisId: ${analysisId}`);
 
-    // 2. Save domain reports to the DB
-    if (result.skinAnalysis) {
-      const skin = result.skinAnalysis as any;
-      await prisma.skinAnalysis.create({
+    try {
+      // 1. Update Analysis status to PROCESSING
+      await prisma.analysis.update({
+        where: { id: analysisId },
+        data: { status: 'PROCESSING' },
+      });
+
+      // 2. Call FastAPI AI Service
+      const endpoint = type === 'skin-analysis' ? '/analyze-skin' : '/analyze-fitness';
+      const response = await fetch(`${AI_SERVICE_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageUrl, questionnaire }),
+      });
+
+      const responseText = await response.text();
+      let result: any;
+      try {
+        result = JSON.parse(responseText);
+      } catch {
+        throw new Error(`AI service returned non-JSON response: ${responseText.slice(0, 300)}`);
+      }
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || `AI service call failed with status ${response.status}`);
+      }
+
+      // 3. Save report and progress to database
+      let resultId = '';
+      if (type === 'skin-analysis') {
+        const report = await prisma.skinReport.create({
+          data: {
+            userId,
+            imageUrl,
+            skinScore: result.skinScore,
+            hydrationScore: result.hydrationScore,
+            acneSeverity: result.acneSeverity,
+            confidence: result.confidence,
+            detectedIssues: result.detectedIssues,
+            recommendations: result.recommendations,
+            aiSummary: result.aiSummary,
+          },
+        });
+        resultId = report.id;
+
+        // Save progress history
+        await prisma.progressHistory.create({
+          data: {
+            userId,
+            metricType: 'skin',
+            score: result.skinScore,
+          },
+        });
+
+        // Trigger an achievement for first skin report
+        const totalSkinReports = await prisma.skinReport.count({ where: { userId } });
+        if (totalSkinReports === 1) {
+          await prisma.achievement.create({
+            data: {
+              userId,
+              title: "Skin Pioneer",
+              description: "Completed your first professional AI skin scan!",
+            },
+          });
+        }
+      } else {
+        const report = await prisma.fitnessReport.create({
+          data: {
+            userId,
+            imageUrl,
+            fitnessScore: result.fitnessScore,
+            postureScore: result.postureScore,
+            mobilityScore: result.mobilityScore,
+            confidence: result.confidence,
+            detectedIssues: result.detectedIssues,
+            recommendations: result.recommendations,
+            aiSummary: result.aiSummary,
+          },
+        });
+        resultId = report.id;
+
+        // Save progress history
+        await prisma.progressHistory.create({
+          data: {
+            userId,
+            metricType: 'fitness',
+            score: result.fitnessScore,
+          },
+        });
+
+        // Trigger an achievement for first fitness report
+        const totalFitnessReports = await prisma.fitnessReport.count({ where: { userId } });
+        if (totalFitnessReports === 1) {
+          await prisma.achievement.create({
+            data: {
+              userId,
+              title: "Fitness Explorer",
+              description: "Analyzed your posture and physical baseline with AI pose tracking!",
+            },
+          });
+        }
+      }
+
+      // 4. Update Analysis status to COMPLETED
+      await prisma.analysis.update({
+        where: { id: analysisId },
         data: {
-          userId,
-          acneScore: typeof skin.skinScore === 'number' ? Math.round(skin.skinScore) : Math.round(skin.acneScore ?? 0),
-          drynessScore: typeof skin.drynessScore === 'number' ? Math.round(skin.drynessScore) : Math.max(0, 100 - (skin.hydration ?? 50)),
-          oilinessScore: typeof skin.oilinessScore === 'number' ? Math.round(skin.oilinessScore) : Math.round(skin.oiliness ?? 0),
-          pigmentationScore: typeof skin.pigmentationScore === 'number' ? Math.round(skin.pigmentationScore) : Math.round(skin.pigmentation ?? 0),
-          confidence: typeof skin.confidence === 'number' ? Math.round(skin.confidence) : 75,
-          aiSummary: skin.aiSummary ?? null,
-          recommendations: (skin.recommendations ?? skin.skincareRoutine ?? []) as Prisma.InputJsonValue,
-          imageUrl: skin.imageUrl ?? data.imageUrl ?? null,
+          status: 'COMPLETED',
+          resultId,
         },
       });
-    }
 
-    // 3. Save combined report
-    if (result.recommendations) {
-      const rec = result.recommendations as any;
-      const scores: number[] = [];
-      if (result.skinAnalysis && typeof (result.skinAnalysis as any).skinScore === 'number') scores.push((result.skinAnalysis as any).skinScore);
-      if (result.mentalAnalysis && typeof (result.mentalAnalysis as any).moodScore === 'number') scores.push((result.mentalAnalysis as any).moodScore);
-      if (result.physicalAnalysis && typeof (result.physicalAnalysis as any).fitnessScore === 'number') scores.push((result.physicalAnalysis as any).fitnessScore);
-
-      const overallHealthScore = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
-
-      await prisma.combinedWellnessReport.create({
+      console.log(`[worker] Successfully completed job ${job.id} for analysisId: ${analysisId}`);
+      return { success: true, resultId };
+    } catch (error: any) {
+      console.error(`[worker] Error processing job ${job.id}:`, error);
+      
+      // Update Analysis status to FAILED with error message
+      await prisma.analysis.update({
+        where: { id: analysisId },
         data: {
-          userId,
-          overallHealthScore,
-          aiInsights: rec?.summary ?? JSON.stringify(rec ?? {}),
-          risks: (rec?.emergencyWarnings ?? []) as Prisma.InputJsonValue,
-          actionPlan: (rec ?? {}) as Prisma.InputJsonValue,
+          status: 'FAILED',
+          error: error.message || 'Unknown processing error',
         },
       });
-    }
 
-    return { success: true };
+      throw error;
+    }
   },
   { connection }
 );

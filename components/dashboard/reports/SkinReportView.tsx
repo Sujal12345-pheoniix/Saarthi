@@ -121,34 +121,99 @@ export default function SkinReportView() {
     }
   };
 
+  const [analysisStatus, setAnalysisStatus] = useState<string>("");
+
   const handleGenerate = async () => {
     setIsGenerating(true);
+    setAnalysisStatus("Uploading");
     try {
       const imageUrl = await uploadImage();
+      if (!imageUrl) {
+        throw new Error("Failed to upload image. Please try again.");
+      }
 
-      const response = await fetch("/api/reports/skin", {
+      setAnalysisStatus("Queuing job");
+      const queueResponse = await fetch("/api/analyze-skin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          skinType: form.skinType,
-          concerns: form.concerns,
-          hydration: form.hydration,
-          sunExposure: form.sunExposure,
-          sleepHours: form.sleepHours,
           imageUrl,
+          questionnaire: {
+            skinType: form.skinType,
+            concerns: form.concerns,
+            hydration: form.hydration,
+            sunExposure: form.sunExposure,
+            sleepHours: form.sleepHours,
+          },
         }),
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.error || "Unable to generate skin report.");
+      const queueData = await queueResponse.json();
+      if (!queueResponse.ok || !queueData.success) {
+        throw new Error(queueData?.error || "Unable to queue skin analysis.");
       }
 
-      setReport(data.report);
-      setFile(null);
+      const { analysisId } = queueData;
+      setAnalysisStatus("QUEUED");
+
+      // Start polling
+      return new Promise<void>((resolve, reject) => {
+        const interval = setInterval(async () => {
+          try {
+            const statusResponse = await fetch(`/api/report/${analysisId}`);
+            const statusData = await statusResponse.json();
+
+            if (!statusResponse.ok || !statusData.success) {
+              clearInterval(interval);
+              reject(new Error(statusData.error || "Failed to check analysis status."));
+              return;
+            }
+
+            if (statusData.status === "COMPLETED") {
+              clearInterval(interval);
+              // Map DB SkinReport structure to SkinReport component format
+              const rep = statusData.report;
+              setReport({
+                title: "Dermatology-style Skin Report",
+                subtitle: `${form.skinType} skin barrier analysis snapshot`,
+                score: rep.skinScore,
+                confidence: rep.confidence,
+                summary: rep.aiSummary,
+                findings: Array.isArray(rep.detectedIssues) ? rep.detectedIssues : JSON.parse(rep.detectedIssues || "[]"),
+                recommendations: Array.isArray(rep.recommendations) ? rep.recommendations : JSON.parse(rep.recommendations || "[]"),
+                activities: [
+                  "Apply a gentle cleanser, moisturizer, and SPF in the morning.",
+                  "Avoid harsh scrubs or physical exfoliators.",
+                  "Track skin redness daily to monitor improvements."
+                ],
+                metrics: [
+                  { label: "Skin score", value: `${rep.skinScore}%`, detail: "Overall barrier health index" },
+                  { label: "Hydration", value: `${rep.hydrationScore}%`, detail: "Internal water-binding capacity" },
+                  { label: "Acne severity", value: `${rep.acneSeverity}/100`, detail: "Inflammatory acne severity rating" },
+                  { label: "Confidence", value: `${rep.confidence}%`, detail: "AI model match confidence" }
+                ],
+                caution: "This report is supportive guidance, not a diagnosis. If you have persistent rash, acne flare-ups, pain, or pigment changes, a board-certified dermatologist should assess it.",
+                imageUrl: rep.imageUrl
+              });
+              setFile(null);
+              setAnalysisStatus("");
+              resolve();
+            } else if (statusData.status === "FAILED") {
+              clearInterval(interval);
+              reject(new Error(statusData.error || "Analysis failed during background processing."));
+            } else {
+              setAnalysisStatus(statusData.status); // e.g. "PROCESSING"
+            }
+          } catch (err) {
+            clearInterval(interval);
+            reject(err);
+          }
+        }, 1500);
+      });
+
     } catch (error) {
       console.error(error);
+      setAnalysisStatus("FAILED");
       alert(error instanceof Error ? error.message : "Something went wrong.");
     } finally {
       setIsGenerating(false);
@@ -378,7 +443,11 @@ export default function SkinReportView() {
                     <motion.span animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }}>
                       <Sparkles className="h-5 w-5" />
                     </motion.span>
-                    Generating report...
+                    {analysisStatus === "Uploading" && "Uploading photo..."}
+                    {analysisStatus === "Queuing job" && "Queuing analysis..."}
+                    {analysisStatus === "QUEUED" && "Waiting in queue..."}
+                    {analysisStatus === "PROCESSING" && "Analyzing skin (running AI)..."}
+                    {!["Uploading", "Queuing job", "QUEUED", "PROCESSING"].includes(analysisStatus) && "Generating report..."}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-2">

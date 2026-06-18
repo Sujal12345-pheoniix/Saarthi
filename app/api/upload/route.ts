@@ -29,33 +29,47 @@ function uploadStream(buffer: Buffer, folder: string) {
 }
 
 export async function POST(request: Request) {
-  const formData = await request.formData();
-  const file = formData.get("file");
-  const folder = String(formData.get("folder") ?? "saarthi-wellness");
+  try {
+    const formData = await request.formData();
+    const file = formData.get("file");
+    const folder = String(formData.get("folder") ?? "saarthi-wellness");
 
-  if (!file) {
-    return Response.json({ error: "A file is required." }, { status: 400 });
+    if (!file) {
+      return Response.json({ success: false, error: "A file is required." }, { status: 400 });
+    }
+
+    // Accept browser `File` and Node/undici `Blob`-like values that implement
+    // `arrayBuffer()` so the route works from both browser fetch and server-side
+    // Node scripts used for testing.
+    let bytes: Buffer;
+    let fileType = "";
+    if (file instanceof File) {
+      bytes = Buffer.from(await file.arrayBuffer());
+      fileType = file.type;
+    } else if (typeof (file as any)?.arrayBuffer === "function") {
+      bytes = Buffer.from(await (file as any).arrayBuffer());
+      fileType = (file as any).type || "";
+    } else {
+      return Response.json({ success: false, error: "A file is required." }, { status: 400 });
+    }
+
+    // Validate image formats: JPG, PNG, WEBP
+    const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+    if (fileType && !allowedTypes.includes(fileType)) {
+      return Response.json({ success: false, error: "Invalid file type. Only JPG, PNG, and WEBP are allowed." }, { status: 400 });
+    }
+
+    // Validate size limit: 10MB
+    const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+    if (bytes.length > MAX_BYTES) {
+      return Response.json({ success: false, error: `File too large. Max ${Math.round(MAX_BYTES / 1024 / 1024)}MB allowed.` }, { status: 413 });
+    }
+
+    const upload = await uploadStream(bytes, folder);
+
+    return Response.json({ success: true, url: upload.secure_url, publicId: upload.public_id });
+  } catch (error: any) {
+    console.error("Error in /api/upload:", error);
+    return Response.json({ success: false, error: error.message || "Upload failed" }, { status: 500 });
   }
-
-  // Accept browser `File` and Node/undici `Blob`-like values that implement
-  // `arrayBuffer()` so the route works from both browser fetch and server-side
-  // Node scripts used for testing.
-  let bytes: Buffer;
-  if (file instanceof File) {
-    bytes = Buffer.from(await file.arrayBuffer());
-  } else if (typeof (file as any)?.arrayBuffer === "function") {
-    bytes = Buffer.from(await (file as any).arrayBuffer());
-  } else {
-    return Response.json({ error: "A file is required." }, { status: 400 });
-  }
-
-  // Basic server-side size guard to avoid upstream platform errors.
-  const MAX_BYTES = 5 * 1024 * 1024; // 5 MB
-  if (bytes.length > MAX_BYTES) {
-    return Response.json({ error: `File too large. Max ${Math.round(MAX_BYTES / 1024 / 1024)}MB allowed.` }, { status: 413 });
-  }
-
-  const upload = await uploadStream(bytes, folder);
-
-  return Response.json({ url: upload.secure_url, publicId: upload.public_id });
 }

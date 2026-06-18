@@ -110,29 +110,91 @@ export default function PhysicalReportView() {
     }
   };
 
+  const [analysisStatus, setAnalysisStatus] = useState<string>("");
+
   const handleGenerate = async () => {
     setIsGenerating(true);
+    setAnalysisStatus("Uploading");
     try {
       const imageUrl = await uploadImage();
-
-      const response = await fetch("/api/reports/physical", {
+      
+      setAnalysisStatus("Queuing job");
+      const queueResponse = await fetch("/api/analyze-fitness", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...form,
-          imageUrl,
+          imageUrl: imageUrl || "https://images.unsplash.com/photo-1517838277536-f5f99be501cd?q=80&w=600", // Fallback if no photo uploaded
+          questionnaire: {
+            ...form
+          },
         }),
       });
-      const data = await response.json();
 
-      if (!response.ok) {
-        throw new Error(data?.error || "Unable to generate physical report.");
+      const queueData = await queueResponse.json();
+      if (!queueResponse.ok || !queueData.success) {
+        throw new Error(queueData?.error || "Unable to queue physical/fitness analysis.");
       }
 
-      setReport(data.report);
-      setFile(null);
+      const { analysisId } = queueData;
+      setAnalysisStatus("QUEUED");
+
+      // Start polling
+      return new Promise<void>((resolve, reject) => {
+        const interval = setInterval(async () => {
+          try {
+            const statusResponse = await fetch(`/api/report/${analysisId}`);
+            const statusData = await statusResponse.json();
+
+            if (!statusResponse.ok || !statusData.success) {
+              clearInterval(interval);
+              reject(new Error(statusData.error || "Failed to check analysis status."));
+              return;
+            }
+
+            if (statusData.status === "COMPLETED") {
+              clearInterval(interval);
+              const rep = statusData.report;
+              setReport({
+                title: "Physical Performance Report",
+                subtitle: `${form.goal} baseline analysis snapshot`,
+                score: rep.fitnessScore,
+                confidence: rep.confidence,
+                summary: rep.aiSummary,
+                findings: Array.isArray(rep.detectedIssues) ? rep.detectedIssues : JSON.parse(rep.detectedIssues || "[]"),
+                recommendations: Array.isArray(rep.recommendations) ? rep.recommendations : JSON.parse(rep.recommendations || "[]"),
+                activities: [
+                  "10-minute warm-up: shoulder rolls and squats.",
+                  "Take a short walk after largest meal.",
+                  "Incorporate daily core planks to stabilize spine."
+                ],
+                metrics: [
+                  { label: "Physical score", value: `${rep.fitnessScore}%`, detail: "Overall posture and fitness rating" },
+                  { label: "Posture score", value: `${rep.postureScore}%`, detail: "Joint alignment score" },
+                  { label: "Mobility score", value: `${rep.mobilityScore}%`, detail: "Functional movement range" },
+                  { label: "Confidence", value: `${rep.confidence}%`, detail: "Pose estimation confidence" }
+                ],
+                caution: "This is a wellness plan, not medical advice. If you have pain, dizziness, extreme fatigue, or rapid weight changes, get a licensed clinician involved.",
+                imageUrl: rep.imageUrl
+              });
+              setFile(null);
+              setAnalysisStatus("");
+              resolve();
+            } else if (statusData.status === "FAILED") {
+              clearInterval(interval);
+              reject(new Error(statusData.error || "Analysis failed during background processing."));
+            } else {
+              setAnalysisStatus(statusData.status); // e.g. "PROCESSING"
+            }
+          } catch (err) {
+            clearInterval(interval);
+            reject(err);
+          }
+        }, 1500);
+      });
+
     } catch (error) {
       console.error(error);
+      setAnalysisStatus("FAILED");
       alert(error instanceof Error ? error.message : "Something went wrong.");
     } finally {
       setIsGenerating(false);
@@ -289,7 +351,18 @@ export default function PhysicalReportView() {
               </div>
 
               <button type="button" onClick={handleGenerate} disabled={isUploading || isGenerating} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-4 font-semibold text-white transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-slate-950">
-                {isGenerating ? <span className="inline-flex items-center gap-2"><motion.span animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }}><Sparkles className="h-5 w-5" /></motion.span>Generating report...</span> : <span className="inline-flex items-center gap-2"><ArrowRight className="h-5 w-5" /> Generate physical report</span>}
+                {isGenerating ? (
+                  <span className="inline-flex items-center gap-2">
+                    <motion.span animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }}><Sparkles className="h-5 w-5" /></motion.span>
+                    {analysisStatus === "Uploading" && "Uploading photo..."}
+                    {analysisStatus === "Queuing job" && "Queuing analysis..."}
+                    {analysisStatus === "QUEUED" && "Waiting in queue..."}
+                    {analysisStatus === "PROCESSING" && "Running Pose Estimation (AI)..."}
+                    {!["Uploading", "Queuing job", "QUEUED", "PROCESSING"].includes(analysisStatus) && "Generating report..."}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-2"><ArrowRight className="h-5 w-5" /> Generate physical report</span>
+                )}
               </button>
             </div>
           </motion.div>

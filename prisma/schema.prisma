@@ -20,8 +20,13 @@ model User {
   createdAt              DateTime                 @default(now())
   updatedAt              DateTime                 @updatedAt
   skinAnalyses           SkinAnalysis[]
+  skinReports            SkinReport[]
   mentalHealthAnalyses   MentalHealthAnalysis[]
   physicalHealthAnalyses PhysicalHealthAnalysis[]
+  fitnessReports         FitnessReport[]
+  analyses               Analysis[]
+  progressHistories      ProgressHistory[]
+  achievements           Achievement[]
   wellnessReports        CombinedWellnessReport[]
   dailyHabits            DailyHabits[]
   conversations          AIConversation[]
@@ -39,6 +44,22 @@ model SkinAnalysis {
   confidence          Float
   aiSummary           String
   recommendations     Json
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model SkinReport {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  imageUrl            String?
+  skinScore           Int
+  hydrationScore      Int
+  acneSeverity        Int
+  confidence          Float
+  detectedIssues      Json     // Array of strings
+  recommendations     Json     // Array of strings
+  aiSummary           String
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 }
@@ -71,6 +92,53 @@ model PhysicalHealthAnalysis {
   recommendations Json
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+}
+
+model FitnessReport {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  imageUrl            String?
+  fitnessScore        Int
+  postureScore        Int
+  mobilityScore       Int
+  confidence          Float
+  detectedIssues      Json     // Array of strings
+  recommendations     Json     // Array of strings
+  aiSummary           String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model Analysis {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       String   // 'skin' | 'fitness' | 'mental'
+  status     String   // 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
+  error      String?
+  resultId   String?  // References SkinReport/FitnessReport id
+  imageUrl   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model ProgressHistory {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date       DateTime @default(now())
+  metricType String   // 'skin' | 'fitness'
+  score      Int
+}
+
+model Achievement {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String
+  unlockedAt  DateTime @default(now())
 }
 
 model CombinedWellnessReport {
@@ -106,3 +174,4 @@ model AIConversation {
   embedding Unsupported("vector(1536)")?
   timestamp DateTime @default(now())
 }
+
