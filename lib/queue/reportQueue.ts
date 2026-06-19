@@ -1,15 +1,10 @@
-import Redis from 'ioredis';
 import { Queue } from 'bullmq';
+import { connection } from './redis';
 
 let analysisQueue: Queue | null = null;
 
 function getAnalysisQueue() {
-  const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
   if (!analysisQueue) {
-    const connection = new Redis(redisUrl, {
-      maxRetriesPerRequest: null,
-    });
-
     analysisQueue = new Queue('analysis-queue', {
       connection,
     });

@@ -1,11 +1,6 @@
 import { Worker } from 'bullmq';
 import { prisma } from '../prisma';
-import Redis from 'ioredis';
-
-const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-const connection = new Redis(redisUrl, {
-  maxRetriesPerRequest: null,
-});
+import { connection } from './redis';
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 
@@ -103,15 +98,170 @@ async function runFallbackAnalysis(type: 'skin' | 'fitness', imageUrl: string, q
   return JSON.parse(content);
 }
 
+async function generateCombinedWellnessReport(userId: string, jobData: any) {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+  const isGeminiNative = !!process.env.GEMINI_API_KEY;
+  
+  let baseUrl = (process.env.OPENAI_BASE_URL || "https://integrate.api.nvidia.com/v1").replace(/\/$/, "");
+  let model = process.env.OPENAI_MODEL || "deepseek-ai/deepseek-r1";
+
+  if (isGeminiNative) {
+    baseUrl = "https://generativelanguage.googleapis.com/v1beta";
+    model = "gemini-2.5-flash";
+  }
+
+  if (!apiKey) {
+    throw new Error('Missing API Key. Please configure GEMINI_API_KEY or OPENAI_API_KEY in your environment variables.');
+  }
+
+  console.log(`[worker] Generating comprehensive combined wellness report for user: ${userId}`);
+
+  let skinInfo = "";
+  if (jobData && jobData.skinQuestionnaire && Object.keys(jobData.skinQuestionnaire).length) {
+    skinInfo = JSON.stringify(jobData.skinQuestionnaire);
+  } else {
+    const latestSkin = await prisma.skinReport.findFirst({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+    skinInfo = latestSkin ? `Score: ${latestSkin.skinScore}%, Hydration: ${latestSkin.hydrationScore}%, Acne Severity: ${latestSkin.acneSeverity}%, Issues: ${JSON.stringify(latestSkin.detectedIssues)}, Summary: ${latestSkin.aiSummary}` : "No skin analysis report available yet.";
+  }
+
+  let physicalInfo = "";
+  if (jobData && jobData.physicalData && Object.keys(jobData.physicalData).length) {
+    physicalInfo = JSON.stringify(jobData.physicalData);
+  } else {
+    const latestFitness = await prisma.fitnessReport.findFirst({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+    physicalInfo = latestFitness ? `Score: ${latestFitness.fitnessScore}%, Posture: ${latestFitness.postureScore}%, Mobility: ${latestFitness.mobilityScore}%, Issues: ${JSON.stringify(latestFitness.detectedIssues)}, Summary: ${latestFitness.aiSummary}` : "No posture/fitness analysis report available yet.";
+  }
+
+  let moodInfo = "";
+  if (jobData && jobData.moodData && Object.keys(jobData.moodData).length) {
+    moodInfo = JSON.stringify(jobData.moodData);
+  } else {
+    const latestMental = await prisma.mentalHealthAnalysis.findFirst({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+    moodInfo = latestMental ? `Mood Score: ${latestMental.moodScore}%, Stress Level: ${latestMental.stressLevel}%, Anxiety: ${latestMental.anxietyLevel}%, Burnout Risk: ${latestMental.burnoutRisk}%, Summary: ${latestMental.aiSummary}` : "No mental health analysis report available yet.";
+  }
+
+  let journals = "";
+  if (jobData && jobData.journalEntries && jobData.journalEntries.length) {
+    journals = jobData.journalEntries.join("\n");
+  } else {
+    journals = "No journal entries logged recently.";
+  }
+
+  const promptText = `Analyze the user's holistic wellness metrics and generate a combined wellness report.
+Inputs:
+- Skin Questionnaire/Data: ${skinInfo}
+- Physical Fitness/Body Data: ${physicalInfo}
+- Mental Health/Mood Data: ${moodInfo}
+- Recent Journal Entries: ${journals}
+
+Act as an expert holistic health & wellness advisor. Synthesize these data points to find correlations, risks, and a clear daily action plan.
+Return ONLY a single valid JSON object matching this schema (no markdown formatting, code block markers, or comments):
+{
+  "overallHealthScore": number (0-100),
+  "aiInsights": "2-3 paragraphs synthesizing their physical, skin, and mental wellness, highlighting potential connections (e.g., how stress/sleep affects skin or energy levels)",
+  "risks": string[],
+  "actionPlan": string[]
+}`;
+
+  let result: any = null;
+
+  if (isGeminiNative) {
+    const geminiUrl = `${baseUrl}/models/${model}:generateContent?key=${apiKey}`;
+    const res = await fetch(geminiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: promptText }
+            ]
+          }
+        ],
+        generationConfig: {
+          responseMimeType: "application/json"
+        }
+      })
+    });
+    
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(`Gemini API failed: ${JSON.stringify(data)}`);
+    }
+    const jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    result = JSON.parse(jsonText.trim());
+  } else {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: "You are a professional holistic wellness AI. Return ONLY a single JSON object." },
+          { role: "user", content: promptText },
+        ],
+        temperature: 0.2,
+        max_tokens: 1200,
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(`AI API failed: ${JSON.stringify(data)}`);
+    }
+
+    let content = data.choices?.[0]?.message?.content || "";
+    if (content.includes("<think>")) {
+      content = content.split("</think>").pop() || content;
+    }
+    content = content.replace(/```json/i, "").replace(/```/g, "").trim();
+    result = JSON.parse(content);
+  }
+
+  const report = await prisma.combinedWellnessReport.create({
+    data: {
+      userId,
+      overallHealthScore: result.overallHealthScore ?? 70,
+      aiInsights: result.aiInsights ?? "Comprehensive wellness analysis completed.",
+      risks: result.risks ?? [],
+      actionPlan: result.actionPlan ?? [],
+    },
+  });
+
+  return report.id;
+}
+
 const createReportWorker = () => new Worker(
   'analysis-queue',
   async (job) => {
-    const { userId, analysisId, imageUrl, questionnaire } = job.data;
-    const type = job.name; // 'skin-analysis' or 'fitness-analysis'
-
-    console.log(`[worker] Processing job ${job.id} for type: ${type}, analysisId: ${analysisId}`);
+    const type = job.name; // 'skin-analysis' or 'fitness-analysis' or 'report-generation'
+    console.log(`[worker] Processing job ${job.id} for type: ${type}`);
+    let analysisId: string | undefined = undefined;
 
     try {
+      if (type === 'report-generation') {
+        const { userId, data: jobData } = job.data;
+        const reportId = await generateCombinedWellnessReport(userId, jobData);
+        console.log(`[worker] Successfully completed job ${job.id} for report-generation, reportId: ${reportId}`);
+        return { success: true, resultId: reportId };
+      }
+
+      const { userId, imageUrl, questionnaire } = job.data;
+      analysisId = job.data.analysisId;
+      console.log(`[worker] Processing analysis job ${job.id} for analysisId: ${analysisId}`);
+
       // 1. Update Analysis status to PROCESSING
       await prisma.analysis.update({
         where: { id: analysisId },
@@ -233,16 +383,15 @@ const createReportWorker = () => new Worker(
       return { success: true, resultId };
     } catch (error: any) {
       console.error(`[worker] Error processing job ${job.id}:`, error);
-      
-      // Update Analysis status to FAILED with error message
-      await prisma.analysis.update({
-        where: { id: analysisId },
-        data: {
-          status: 'FAILED',
-          error: error.message || 'Unknown processing error',
-        },
-      });
-
+      if (analysisId) {
+        await prisma.analysis.update({
+          where: { id: analysisId },
+          data: {
+            status: 'FAILED',
+            error: error.message || 'Unknown processing error',
+          },
+        });
+      }
       throw error;
     }
   },
