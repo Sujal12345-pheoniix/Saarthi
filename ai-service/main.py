@@ -30,6 +30,10 @@ def load_env():
 
 load_env()
 
+@app.get("/")
+async def root():
+    return {"status": "online", "service": "Saarthi AI Inference Service"}
+
 class AnalysisRequest(BaseModel):
     imageUrl: str
     questionnaire: Optional[dict] = Field(default_factory=dict)
