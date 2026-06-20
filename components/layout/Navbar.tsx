@@ -12,8 +12,8 @@ export default function Navbar() {
     <header className="fixed top-0 left-0 right-0 z-50 glass border-b-0 border-white/10">
       <div className="container mx-auto px-4 h-20 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2 group">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-teal-400 flex items-center justify-center text-white shadow-lg shadow-primary-500/20 group-hover:scale-105 transition-transform">
-            <Sparkles className="w-5 h-5" />
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-teal-400 flex items-center justify-center text-white shadow-lg shadow-primary-500/20 group-hover:scale-105 transition-transform overflow-hidden p-2">
+            <img src="/saarthi-logo.png" alt="Logo" className="w-full h-full object-contain" />
           </div>
           <span className="text-xl font-bold text-foreground tracking-tight">Saarthi</span>
         </Link>

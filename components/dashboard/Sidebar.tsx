@@ -33,8 +33,8 @@ export default function Sidebar() {
     <aside className="w-64 h-screen border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 flex flex-col fixed left-0 top-0">
       <div className="h-20 flex items-center px-6 border-b border-slate-200 dark:border-slate-800">
         <Link href="/" className="flex items-center gap-2 group">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary-500 to-teal-400 flex items-center justify-center text-white shadow-lg group-hover:scale-105 transition-transform">
-            <Sparkles className="w-4 h-4" />
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary-500 to-teal-400 flex items-center justify-center text-white shadow-lg group-hover:scale-105 transition-transform overflow-hidden p-1.5">
+            <img src="/saarthi-logo.png" alt="Logo" className="w-full h-full object-contain" />
           </div>
           <span className="text-xl font-bold tracking-tight text-foreground">Saarthi</span>
         </Link>
