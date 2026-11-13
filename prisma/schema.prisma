@@ -30,6 +30,27 @@ enum AnalysisStatus {
   PROCESSING
   COMPLETED
   FAILED
+  /// Cancelled by the owner before completion. Terminal.
+  CANCELLED
+}
+
+/// Which product feature made an AI provider call (cost/latency accounting).
+enum AiFeature {
+  COMBINED_SYNTHESIS
+  COMPANION
+  JOURNAL_SUMMARY
+}
+
+enum GoalStatus {
+  ACTIVE
+  ACHIEVED
+  ABANDONED
+}
+
+/// Sex used ONLY for published energy equations that require it. Optional; never inferred.
+enum SexForCalculation {
+  FEMALE
+  MALE
 }
 
 /// How a report's numbers were produced. Never infer a stronger method than this.
@@ -113,16 +134,26 @@ model User {
   conversations    AIConversation[]
   notifications    Notification[]
   auditLogs        AuditLog[]
+  goals            WellnessGoal[]
+  aiUsage          AiUsageEvent[]
 }
 
 model UserProfile {
   userId    String   @id
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Legacy free-form fields (pre-Phase-2). Not used by calculations.
   age       Int?
   gender    String?
   heightCm  Float?
   weightKg  Float?
   lifestyle String?
+  /// Year of birth; age is derived at calculation time so it never goes stale.
+  birthYear           Int?
+  sexForCalculation   SexForCalculation?
+  /// Standard adult equations do not apply; calculations are withheld when true.
+  pregnantOrLactating Boolean?
+  /// User-declared context (e.g. wheelchair user) under which step/activity equations may not apply.
+  mobilityLimitation  Boolean?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -197,15 +228,30 @@ model Analysis {
   status         AnalysisStatus @default(QUEUED)
   /// Client-supplied key; duplicates for the same user return the original analysis.
   idempotencyKey String?
+  /// BullMQ job id (equal to the analysis id for queued work; null for synchronous analyses).
+  jobId          String?
   inputAssetId   String?
   inputAsset     UploadedAsset? @relation(fields: [inputAssetId], references: [id], onDelete: SetNull)
+  /// Processing attempts so far ("retryCount" = attempts - 1).
   attempts       Int            @default(0)
+  /// Failure code ("failureCode"); stable, machine-readable.
   errorCode      String?
-  /// User-safe message. Never contains provider bodies or stack traces.
+  /// User-safe failure message ("failureMessage"). Never contains provider bodies or stack traces.
   errorMessage   String?
+  /// Provenance: provider and model that produced the result, e.g. "saarthi-cv" / "skin-cv@3", "anthropic" / "claude-opus-5-5".
+  modelProvider  String?
+  modelId        String?
+  modelVersion   String?
+  /// Version of the prompt or rule set used (e.g. "synthesis-prompt@2", "questionnaire-rules@2").
+  promptVersion  String?
+  /// Non-identifying description of the input (asset dimensions/type, questionnaire schema version). No images, no free text.
+  inputMetadata  Json?
+  /// Non-identifying description of the run (duration, token usage, contract version).
+  resultMetadata Json?
   queuedAt       DateTime       @default(now())
   startedAt      DateTime?
   completedAt    DateTime?
+  cancelledAt    DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -238,6 +284,10 @@ model AnalysisResult {
   engineVersion String
   rawOutput     Json
   durationMs    Int?
+  inputTokens   Int?
+  outputTokens  Int?
+  /// Estimate from the configured price table (lib/ai/pricing.ts). Null when no price is configured.
+  estimatedCostUsd Float?
   createdAt     DateTime @default(now())
 }
 
@@ -384,12 +434,20 @@ model DailyHabit {
   id              String   @id @default(cuid())
   userId          String
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Calendar day in the user's timezone. One self-reported log per day; every field is optional.
   date            DateTime @db.Date
   waterMl         Int?
   steps           Int?
   sleepHours      Float?
+  /// Self-rated sleep quality, 1-5.
+  sleepQuality    Int?
   exerciseMinutes Int?
+  /// Self-rated, 1-5.
   moodRating      Int?
+  /// Self-rated, 0-10.
+  stressLevel     Int?
+  /// Self-rated, 1-5.
+  energyRating    Int?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -400,6 +458,7 @@ model JournalEntry {
   id         String   @id @default(cuid())
   userId     String
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Encrypted at the application layer when FIELD_ENCRYPTION_KEY is configured ("enc:v1:..." prefix).
   content    String
   moodRating Int?
   createdAt  DateTime @default(now())
@@ -414,14 +473,72 @@ model Recommendation {
   user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   domain         WellnessDomain
   sourceReportId String?
+  /// What to do.
   text           String
+  /// Stable rule identifier, e.g. "sleep.below_7h". Unique per user while ACTIVE (dedupe on regeneration).
+  ruleId         String?
+  engineVersion  String?
+  /// Why it is recommended.
+  rationale      String?
+  /// Which of the user's data supports it: [{ source, field, value, unit, recordedAt }].
+  evidence       Json?
+  /// Expected measurable behaviour, e.g. "Log ≥7 h sleep on 5 of the next 7 nights".
+  measurableTarget String?
+  frequency      String?
+  limitations    Json?
   priority       Int                  @default(0)
   status         RecommendationStatus @default(ACTIVE)
   completedAt    DateTime?
+  expiresAt      DateTime?
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 
   @@index([userId, status, createdAt])
+  @@index([userId, ruleId])
+}
+
+/// A user-defined target for one tracked metric.
+model WellnessGoal {
+  id          String         @id @default(cuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain      WellnessDomain
+  /// Metric key from the metric registry (features/metrics/registry.ts), e.g. "habit.sleepHours".
+  metric      String
+  /// "at_least" | "at_most"
+  direction   String
+  targetValue Float
+  unit        String
+  startDate   DateTime       @db.Date
+  targetDate  DateTime?      @db.Date
+  status      GoalStatus     @default(ACTIVE)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([userId, status])
+}
+
+/// One call to an AI provider: latency, token usage and estimated cost. Contains no prompt or response text.
+model AiUsageEvent {
+  id               String    @id @default(cuid())
+  userId           String?
+  user             User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  feature          AiFeature
+  provider         String
+  model            String
+  promptVersion    String?
+  success          Boolean
+  errorCode        String?
+  latencyMs        Int
+  inputTokens      Int?
+  outputTokens     Int?
+  estimatedCostUsd Float?
+  /// Set when a fallback provider served the request.
+  fallbackFrom     String?
+  createdAt        DateTime  @default(now())
+
+  @@index([feature, createdAt])
+  @@index([userId, createdAt])
 }
 
 // ───────────────────────────── AI companion ─────────────────────────────
@@ -443,7 +560,14 @@ model AIMessage {
   conversationId String
   conversation   AIConversation               @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   role           MessageRole
+  /// Encrypted at the application layer when FIELD_ENCRYPTION_KEY is configured.
   content        String
+  /// Assistant messages: "provider:model" that produced it.
+  model          String?
+  inputTokens    Int?
+  outputTokens   Int?
+  /// Safety handling applied to this turn, e.g. { crisisResourcesShown: true }. Never contains message text.
+  safety         Json?
   /// pgvector embedding for retrieval (Phase 3).
   embedding      Unsupported("vector(1536)")?
   createdAt      DateTime                     @default(now())

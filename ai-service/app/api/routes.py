@@ -5,10 +5,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from app.schemas.analysis import FitnessAnalysisResponse, SkinAnalysisResponse
+from app.schemas.analysis import CONTRACT_VERSION, FitnessAnalysisResponse, SkinAnalysisResponse
 from app.security.auth import require_service_token
+from app.services.fitness import ENGINE_VERSION as POSTURE_ENGINE_VERSION
 from app.services.fitness import analyze_posture
 from app.services.image_io import ImageRejected, decode_image
+from app.services.skin import ENGINE_VERSION as SKIN_ENGINE_VERSION
 from app.services.skin import analyze_skin
 
 router = APIRouter()
@@ -26,6 +28,28 @@ async def _read_upload(request: Request, image: UploadFile) -> bytes:
     if len(data) > limit:
         raise ImageRejected("The image exceeds the maximum upload size.", 413)
     return data
+
+
+@router.get("/v1/engines", dependencies=[Depends(require_service_token)])
+async def engines() -> dict:
+    """Engine versions and explicit capabilities, for the web app's provider/capability registry."""
+    return {
+        "contractVersion": CONTRACT_VERSION,
+        "engines": {
+            "skin": {
+                "engineVersion": SKIN_ENGINE_VERSION,
+                "input": "single still image (JPEG/PNG/WEBP), one face",
+                "capabilities": ["image_quality", "face_detection", "region_measurements"],
+                "notCapable": ["diagnosis", "hydration", "oil_production", "calibrated_confidence"],
+            },
+            "posture": {
+                "engineVersion": POSTURE_ENGINE_VERSION,
+                "input": "single still image (JPEG/PNG/WEBP), one person, frontal or side view",
+                "capabilities": ["image_quality", "pose_landmarks", "view_classification", "alignment_angles"],
+                "notCapable": ["mobility", "strength", "cardiovascular_fitness", "body_composition", "video", "calibrated_confidence"],
+            },
+        },
+    }
 
 
 @router.post("/v1/analyze/skin", response_model=SkinAnalysisResponse, dependencies=[Depends(require_service_token)])

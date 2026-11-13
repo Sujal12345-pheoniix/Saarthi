@@ -73,6 +73,15 @@ const rawSchema = z.object({
   OPENAI_API_KEY: optionalString,
   OPENAI_BASE_URL: optionalUrl,
   OPENAI_MODEL: optionalString,
+  /** Ordered fallback providers tried when the primary fails with a retryable error, e.g. "gemini". */
+  LLM_FALLBACK_PROVIDERS: csv,
+  /** Optional JSON price overrides: {"model":{"inputPerMTok":n,"outputPerMTok":n}}. */
+  LLM_PRICE_TABLE: optionalString,
+
+  /** base64 of 32 random bytes. Encrypts journal entries and companion messages at the application layer. */
+  FIELD_ENCRYPTION_KEY: optionalString,
+  /** Port for the worker's /health and /ready endpoints. Unset = no health server. */
+  WORKER_HEALTH_PORT: z.coerce.number().int().min(1).max(65535).optional(),
 });
 
 export type AppEnvName = "development" | "test" | "staging" | "production";
@@ -101,7 +110,13 @@ export interface ServerEnv {
     anthropic?: { apiKey: string; model: string };
     gemini?: { apiKey: string; model: string };
     openaiCompatible?: { apiKey: string; baseUrl: string; model: string };
+    /** Tried in order when the primary fails with a retryable error. Never includes the primary. */
+    fallbackProviders: Exclude<LlmProviderName, "none">[];
+    priceTable: Record<string, { inputPerMTok: number; outputPerMTok: number }>;
   };
+  /** 32-byte AES-256-GCM key, or undefined when field encryption is not configured. */
+  fieldEncryptionKey?: Buffer;
+  workerHealthPort?: number;
 }
 
 export class ConfigError extends Error {
@@ -167,6 +182,46 @@ export function parseEnv(source: Record<string, string | undefined>): ServerEnv 
     issues.push("OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL: all required when LLM_PROVIDER=openai_compatible");
   }
 
+  const fallbackProviders: Exclude<LlmProviderName, "none">[] = [];
+  for (const name of raw.LLM_FALLBACK_PROVIDERS) {
+    if (name !== "anthropic" && name !== "gemini" && name !== "openai_compatible") {
+      issues.push(`LLM_FALLBACK_PROVIDERS: unknown provider "${name}"`);
+    } else if (name !== provider && !fallbackProviders.includes(name)) {
+      fallbackProviders.push(name);
+    }
+  }
+  if (fallbackProviders.includes("anthropic") && !raw.ANTHROPIC_API_KEY)
+    issues.push("ANTHROPIC_API_KEY: required when anthropic is a fallback provider");
+  if (fallbackProviders.includes("gemini") && !raw.GEMINI_API_KEY)
+    issues.push("GEMINI_API_KEY: required when gemini is a fallback provider");
+  if (
+    fallbackProviders.includes("openai_compatible") &&
+    !(raw.OPENAI_API_KEY && raw.OPENAI_BASE_URL && raw.OPENAI_MODEL)
+  )
+    issues.push("OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL: required when openai_compatible is a fallback provider");
+
+  const priceTableSchema = z.record(
+    z.string(),
+    z.object({ inputPerMTok: z.number().nonnegative(), outputPerMTok: z.number().nonnegative() }).strict(),
+  );
+  let priceTable: Record<string, { inputPerMTok: number; outputPerMTok: number }> = {};
+  if (raw.LLM_PRICE_TABLE) {
+    try {
+      const parsedTable = priceTableSchema.safeParse(JSON.parse(raw.LLM_PRICE_TABLE));
+      if (parsedTable.success) priceTable = parsedTable.data;
+      else issues.push('LLM_PRICE_TABLE: must be {"<model>":{"inputPerMTok":n,"outputPerMTok":n}}');
+    } catch {
+      issues.push("LLM_PRICE_TABLE: must be valid JSON");
+    }
+  }
+
+  let fieldEncryptionKey: Buffer | undefined;
+  if (raw.FIELD_ENCRYPTION_KEY) {
+    const key = Buffer.from(raw.FIELD_ENCRYPTION_KEY, "base64");
+    if (key.length !== 32) issues.push("FIELD_ENCRYPTION_KEY: must be base64 of exactly 32 bytes");
+    else fieldEncryptionKey = key;
+  }
+
   // ── Staging / production rules ──
   if (strict) {
     const required: Array<[string, unknown]> = [
@@ -177,9 +232,16 @@ export function parseEnv(source: Record<string, string | undefined>): ServerEnv 
       ["CLOUDINARY_CLOUD_NAME", raw.CLOUDINARY_CLOUD_NAME],
       ["AI_SERVICE_URL", raw.AI_SERVICE_URL],
       ["AI_SERVICE_TOKEN", raw.AI_SERVICE_TOKEN],
+      ["FIELD_ENCRYPTION_KEY", raw.FIELD_ENCRYPTION_KEY],
     ];
     for (const [name, value] of required) {
       if (!value) issues.push(`${name}: required when APP_ENV=${appEnv}`);
+    }
+    if (raw.ANALYSIS_EXECUTION_MODE === "inline") {
+      // Expensive inference must not run inside serverless request handlers in deployed environments.
+      issues.push(
+        `ANALYSIS_EXECUTION_MODE: "inline" is not allowed when APP_ENV=${appEnv}; deploy the worker and use "queue"`,
+      );
     }
     if (raw.ANALYSIS_EXECUTION_MODE === "queue" && !redisUrl) {
       issues.push(`REDIS_URL: required when APP_ENV=${appEnv} and ANALYSIS_EXECUTION_MODE=queue`);
@@ -229,7 +291,11 @@ export function parseEnv(source: Record<string, string | undefined>): ServerEnv 
         raw.OPENAI_API_KEY && raw.OPENAI_BASE_URL && raw.OPENAI_MODEL
           ? { apiKey: raw.OPENAI_API_KEY, baseUrl: raw.OPENAI_BASE_URL.replace(/\/+$/, ""), model: raw.OPENAI_MODEL }
           : undefined,
+      fallbackProviders,
+      priceTable,
     },
+    fieldEncryptionKey,
+    workerHealthPort: raw.WORKER_HEALTH_PORT,
   };
 }
 
