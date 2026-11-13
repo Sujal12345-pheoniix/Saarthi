@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://saarthi.local/schemas/cv-eval-manifest-entry.json",
+  "title": "Saarthi CV evaluation manifest entry (one JSON object per line)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "imagePath", "domain", "expected", "provenance"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "imagePath": { "type": "string", "description": "Path relative to the manifest file." },
+    "domain": { "enum": ["skin", "posture"] },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shouldReject"],
+      "properties": {
+        "shouldReject": { "type": "boolean", "description": "True when a careful reviewer would reject the photo (no face/person, blurry, multiple people, wrong framing)." },
+        "rejectReason": { "type": "string" },
+        "view": { "enum": ["frontal", "side"], "description": "Posture only." },
+        "measurements": {
+          "type": "object",
+          "description": "Reference values keyed by measurement key (e.g. shoulderTiltDeg measured by a trained annotator on the same image, reddishSpotCount counted by a dermatology-trained annotator).",
+          "additionalProperties": { "type": "number" }
+        }
+      }
+    },
+    "cohort": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fitzpatrick": { "enum": ["I", "II", "III", "IV", "V", "VI"] },
+        "monkSkinTone": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "lighting": { "type": "string", "examples": ["daylight-window", "indoor-warm", "indoor-cool", "flash", "low-light"] },
+        "camera": { "type": "string", "examples": ["phone-front", "phone-rear", "webcam", "dslr"] },
+        "ageBand": { "type": "string", "examples": ["18-29", "30-44", "45-59", "60+"] },
+        "bodyType": { "type": "string" },
+        "pose": { "type": "string", "examples": ["standing-relaxed", "standing-arms-raised", "seated"] },
+        "occlusion": { "type": "string", "examples": ["none", "glasses", "hair", "mask", "loose-clothing"] }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["dataset", "source", "license", "consent", "labelledBy", "labelProtocol"],
+      "properties": {
+        "dataset": { "type": "string" },
+        "source": { "type": "string", "description": "Where the image came from (URL of the dataset, collection study id)." },
+        "license": { "type": "string", "description": "Licence permitting use for model evaluation (SPDX id or contract reference)." },
+        "consent": { "type": "string", "description": "Basis of consent for biometric/health-adjacent use (e.g. 'explicit written consent, study XYZ')." },
+        "labelledBy": { "type": "string", "description": "Role/qualification of the annotator (e.g. 'board-certified dermatologist', 'physiotherapist')." },
+        "labelProtocol": { "type": "string", "description": "Reference to the written labelling protocol." },
+        "collectedAt": { "type": "string" }
+      }
+    }
+  }
+}

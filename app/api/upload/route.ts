@@ -1,75 +1,51 @@
-import { v2 as cloudinary } from "cloudinary";
-import { Readable } from "node:stream";
+import type { AssetPurpose } from "@prisma/client";
+import { Errors } from "@/lib/api/errors";
+import { readBodyWithLimit } from "@/lib/api/body";
+import { withAuth } from "@/lib/api/handler";
+import { getPrisma } from "@/lib/database/prisma";
+import { RATE_LIMITS } from "@/lib/security/rate-limit";
+import { UPLOAD_IMAGE_LIMITS } from "@/lib/security/image-validation";
+import { uploadAsset } from "@/server/services/assets";
 
 export const runtime = "nodejs";
 
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-  secure: true,
-});
+/** Multipart overhead allowance on top of the image limit. */
+const MAX_REQUEST_BYTES = UPLOAD_IMAGE_LIMITS.maxBytes + 64 * 1024;
 
-function uploadStream(buffer: Buffer, folder: string) {
-  return new Promise<{ secure_url: string; public_id: string }>((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      { folder, resource_type: "image" },
-      (error, result) => {
-        if (error || !result) {
-          reject(error ?? new Error("Cloudinary upload failed"));
-          return;
-        }
+/** `purpose` is the supported field; `folder` values sent by pre-Phase-1 clients are mapped, never used as paths. */
+const PURPOSES: Record<string, AssetPurpose> = {
+  skin: "SKIN_SCAN",
+  physical: "PHYSICAL_SCAN",
+  "saarthi/skin": "SKIN_SCAN",
+  "saarthi/physical": "PHYSICAL_SCAN",
+};
 
-        resolve({ secure_url: result.secure_url, public_id: result.public_id });
-      }
-    );
-
-    Readable.from(buffer).pipe(stream);
-  });
-}
-
-export async function POST(request: Request) {
-  try {
-    const formData = await request.formData();
-    const file = formData.get("file");
-    const folder = String(formData.get("folder") ?? "saarthi-wellness");
-
-    if (!file) {
-      return Response.json({ success: false, error: "A file is required." }, { status: 400 });
-    }
-
-    // Accept browser `File` and Node/undici `Blob`-like values that implement
-    // `arrayBuffer()` so the route works from both browser fetch and server-side
-    // Node scripts used for testing.
-    let bytes: Buffer;
-    let fileType = "";
-    if (file instanceof File) {
-      bytes = Buffer.from(await file.arrayBuffer());
-      fileType = file.type;
-    } else if (typeof (file as any)?.arrayBuffer === "function") {
-      bytes = Buffer.from(await (file as any).arrayBuffer());
-      fileType = (file as any).type || "";
-    } else {
-      return Response.json({ success: false, error: "A file is required." }, { status: 400 });
-    }
-
-    // Validate image formats: JPG, PNG, WEBP
-    const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
-    if (fileType && !allowedTypes.includes(fileType)) {
-      return Response.json({ success: false, error: "Invalid file type. Only JPG, PNG, and WEBP are allowed." }, { status: 400 });
-    }
-
-    // Validate size limit: 10MB
-    const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
-    if (bytes.length > MAX_BYTES) {
-      return Response.json({ success: false, error: `File too large. Max ${Math.round(MAX_BYTES / 1024 / 1024)}MB allowed.` }, { status: 413 });
-    }
-
-    const upload = await uploadStream(bytes, folder);
-
-    return Response.json({ success: true, url: upload.secure_url, publicId: upload.public_id });
-  } catch (error: any) {
-    console.error("Error in /api/upload:", error);
-    return Response.json({ success: false, error: error.message || "Upload failed" }, { status: 500 });
+/**
+ * POST /api/upload  (multipart/form-data: file, purpose = "skin" | "physical")
+ * Verifies the image server-side, stores it privately and returns an asset id owned by the caller.
+ */
+export const POST = withAuth({ rateLimit: RATE_LIMITS.upload }, async ({ req, user, requestId, log }) => {
+  const contentType = req.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
+    throw Errors.unsupportedMediaType("Upload must be multipart/form-data.");
   }
-}
+  if (req.headers.get("content-length") === null) throw Errors.lengthRequired();
+
+  const raw = await readBodyWithLimit(req, MAX_REQUEST_BYTES);
+  let form: FormData;
+  try {
+    form = await new Response(Buffer.from(raw), { headers: { "content-type": contentType } }).formData();
+  } catch {
+    throw Errors.badRequest("Malformed multipart body.");
+  }
+
+  const purposeField = String(form.get("purpose") ?? form.get("folder") ?? "");
+  const purpose = PURPOSES[purposeField];
+  if (!purpose) throw Errors.badRequest('Field "purpose" must be "skin" or "physical".');
+
+  const file = form.get("file");
+  if (!(file instanceof Blob)) throw Errors.badRequest('Field "file" is required.');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+
+  return uploadAsset(getPrisma(), { userId: user.id, purpose, bytes, requestId, log });
+});

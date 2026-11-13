@@ -1,45 +1,13 @@
-import { NextResponse } from 'next/server';
-import { auth } from '@clerk/nextjs/server';
-import { prisma } from '@/lib/prisma';
+import { withAuth } from "@/lib/api/handler";
+import { getPrisma } from "@/lib/database/prisma";
+import { RATE_LIMITS } from "@/lib/security/rate-limit";
+import { combinedReportView } from "@/features/reports/view-model";
+import { latestCombinedReport } from "@/server/repositories/reports";
 
-export const runtime = 'nodejs';
+export const runtime = "nodejs";
 
-async function checkAuth() {
-  if (process.env.DEV_ALLOW_ANON === 'true') {
-    return 'dev_local_id';
-  }
-  const { userId } = await auth();
-  if (!userId) {
-    throw new Error('Unauthorized');
-  }
-  const user = await prisma.user.findUnique({
-    where: { clerkId: userId },
-  });
-  if (!user) {
-    throw new Error('User not found');
-  }
-  return user.id;
-}
-
-export async function GET() {
-  try {
-    const userId = await checkAuth();
-
-    const latestReport = await prisma.combinedWellnessReport.findFirst({
-      where: { userId },
-      orderBy: { generatedAt: 'desc' },
-    });
-
-    return NextResponse.json({
-      success: true,
-      report: latestReport,
-    });
-  } catch (error: any) {
-    console.error('Error in GET /api/report/latest:', error);
-    const message = error.message || 'Internal Server Error';
-    return NextResponse.json(
-      { success: false, error: message },
-      { status: message === 'Unauthorized' ? 401 : 500 }
-    );
-  }
-}
+/** GET /api/report/latest — the caller's most recent combined wellness report, or null. */
+export const GET = withAuth({ rateLimit: RATE_LIMITS.read }, async ({ user }) => {
+  const report = await latestCombinedReport(getPrisma(), user.id);
+  return { report: report ? combinedReportView(report) : null };
+});

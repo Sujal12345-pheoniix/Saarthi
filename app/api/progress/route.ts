@@ -1,46 +1,20 @@
-import { auth } from "@clerk/nextjs/server";
-import { prisma } from "@/lib/prisma";
+import { withAuth } from "@/lib/api/handler";
+import { getPrisma } from "@/lib/database/prisma";
+import { RATE_LIMITS } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
 
-async function checkAuth() {
-  if (process.env.DEV_ALLOW_ANON === "true") {
-    return "dev_local_id";
-  }
-  const { userId } = await auth();
-  if (!userId) {
-    throw new Error("Unauthorized");
-  }
-  const user = await prisma.user.findUnique({
-    where: { clerkId: userId },
+/** GET /api/progress — the caller's score history grouped by domain. */
+export const GET = withAuth({ rateLimit: RATE_LIMITS.read }, async ({ user }) => {
+  const rows = await getPrisma().progressHistory.findMany({
+    where: { userId: user.id },
+    orderBy: { recordedAt: "asc" },
+    select: { domain: true, metric: true, value: true, recordedAt: true, sourceReportId: true },
+    take: 1000,
   });
-  if (!user) {
-    throw new Error("User not found");
-  }
-  return user.id;
-}
-
-export async function GET() {
-  try {
-    const userId = await checkAuth();
-
-    const progress = await prisma.progressHistory.findMany({
-      where: { userId },
-      orderBy: { date: "asc" },
-    });
-
-    // Group progress by type
-    const skinProgress = progress.filter((p) => p.metricType === "skin");
-    const fitnessProgress = progress.filter((p) => p.metricType === "fitness");
-
-    return Response.json({
-      success: true,
-      skinProgress,
-      fitnessProgress,
-    });
-  } catch (error: any) {
-    console.error("Error in GET /api/progress:", error);
-    const message = error.message || "Internal Server Error";
-    return Response.json({ success: false, error: message }, { status: message === "Unauthorized" ? 401 : 500 });
-  }
-}
+  return {
+    skin: rows.filter((r) => r.domain === "SKIN"),
+    physical: rows.filter((r) => r.domain === "PHYSICAL"),
+    mental: rows.filter((r) => r.domain === "MENTAL"),
+  };
+});

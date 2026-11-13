@@ -4,21 +4,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowRight, FileText, HeartPulse, Brain, Activity, Sparkles, Loader2, AlertTriangle, CheckSquare } from "lucide-react";
+import type { CombinedReportView, ReportView } from "@/features/reports/view-model";
+import { apiRequest, newIdempotencyKey, pollAnalysis } from "@/lib/api/client";
 
-type ReportSummary = {
-  title: string;
-  score: number;
-  summary: string;
-};
-
-type CombinedReport = {
-  id: string;
-  overallHealthScore: number;
-  aiInsights: string;
-  risks: any;
-  actionPlan: any;
-  generatedAt: string;
-};
+type ReportSummary = Pick<ReportView, "title" | "score" | "summary" | "methodLabel">;
+type CombinedReport = CombinedReportView;
 
 const reportCards = [
   {
@@ -52,18 +42,20 @@ export default function ReportsPage() {
   const [isCompiling, setIsCompiling] = useState(false);
   const [compileStatus, setCompileStatus] = useState("");
 
+  const [compileError, setCompileError] = useState("");
+
   const fetchLatestData = () => {
     Promise.all([
-      fetch("/api/reports/skin").then((response) => response.json()),
-      fetch("/api/reports/physical").then((response) => response.json()),
-      fetch("/api/reports/mental").then((response) => response.json()),
-      fetch("/api/report/latest").then((response) => response.json()),
+      apiRequest<{ report: ReportSummary | null }>("/api/reports/skin"),
+      apiRequest<{ report: ReportSummary | null }>("/api/reports/physical"),
+      apiRequest<{ report: ReportSummary | null }>("/api/reports/mental"),
+      apiRequest<{ report: CombinedReport | null }>("/api/report/latest"),
     ])
       .then(([skinData, physicalData, mentalData, latestCombined]) => {
-        setSkin(skinData?.report ?? null);
-        setPhysical(physicalData?.report ?? null);
-        setMental(mentalData?.report ?? null);
-        setCombined(latestCombined?.report ?? null);
+        setSkin(skinData.report);
+        setPhysical(physicalData.report);
+        setMental(mentalData.report);
+        setCombined(latestCombined.report);
       })
       .catch(() => undefined);
   };
@@ -72,66 +64,32 @@ export default function ReportsPage() {
     fetchLatestData();
   }, []);
 
+  const STATUS_TEXT: Record<string, string> = {
+    QUEUED: "Waiting in queue...",
+    PROCESSING: "AI is writing your synthesis...",
+  };
+
   const handleCompileReport = async () => {
     setIsCompiling(true);
-    setCompileStatus("Initializing synthesis engine...");
+    setCompileError("");
+    setCompileStatus("Queuing synthesis...");
     try {
-      const response = await fetch("/api/report/generate", {
+      const queued = await apiRequest<{ analysisId: string; status: string }>("/api/report/generate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        json: { idempotencyKey: newIdempotencyKey() },
       });
-
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || "Failed to generate report.");
-      }
-
-      setCompileStatus("Holistic AI analyzer processing... (this may take a moment)");
-      
-      // Let's poll for the latest report
-      let attempts = 0;
-      const interval = setInterval(async () => {
-        attempts++;
-        if (attempts > 20) {
-          clearInterval(interval);
-          setIsCompiling(false);
-          alert("Generation is taking longer than expected. Please refresh the page in a moment.");
-          return;
-        }
-
-        try {
-          const res = await fetch("/api/report/latest");
-          const latest = await res.json();
-          if (res.ok && latest.report && (!combined || latest.report.id !== combined.id)) {
-            clearInterval(interval);
-            setCombined(latest.report);
-            setIsCompiling(false);
-          }
-        } catch (e) {
-          // ignore error
-        }
-      }, 2000);
-
-    } catch (e: any) {
-      console.error(e);
-      alert(e.message || "Failed to compile report.");
+      const report = await pollAnalysis<CombinedReport>(queued.analysisId, (status) => setCompileStatus(STATUS_TEXT[status] ?? status), {
+        intervalMs: 2000,
+      });
+      setCombined(report);
+    } catch (e) {
+      setCompileError(e instanceof Error ? e.message : "Failed to compile report.");
+    } finally {
       setIsCompiling(false);
     }
   };
 
-  const getArray = (val: any): string[] => {
-    if (!val) return [];
-    if (Array.isArray(val)) return val;
-    if (typeof val === "string") {
-      try {
-        return JSON.parse(val);
-      } catch {
-        return [val];
-      }
-    }
-    return [];
-  };
+  const getArray = (val: unknown): string[] => (Array.isArray(val) ? val.filter((v): v is string => typeof v === "string") : []);
 
   const parsedRisks = getArray(combined?.risks);
   const parsedActionPlan = getArray(combined?.actionPlan);
@@ -196,6 +154,12 @@ export default function ReportsPage() {
             </button>
           </div>
 
+          {compileError && (
+            <div className="mt-6 rounded-2xl border border-rose-500/20 bg-rose-500/5 p-4 text-sm text-rose-700 dark:text-rose-300">
+              {compileError}
+            </div>
+          )}
+
           <AnimatePresence mode="wait">
             {combined ? (
               <motion.div
@@ -209,8 +173,8 @@ export default function ReportsPage() {
                 <div className="space-y-6">
                   <div className="rounded-3xl bg-slate-100/50 p-6 text-center dark:bg-slate-900/30">
                     <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Overall Health Score</span>
-                    <div className="mt-3 text-7xl font-black tracking-tighter text-emerald-500">{combined.overallHealthScore}%</div>
-                    <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Combined baseline metric</p>
+                    <div className="mt-3 text-7xl font-black tracking-tighter text-emerald-500">{combined.overallHealthScore ?? "--"}{combined.overallHealthScore !== null ? "%" : ""}</div>
+                    <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{combined.scoreExplanation}</p>
                   </div>
 
                   {/* Risks list */}
@@ -320,7 +284,8 @@ export default function ReportsPage() {
                 <h3 className="text-lg font-bold text-slate-950 dark:text-white">{item.label}</h3>
                 <Sparkles className="h-5 w-5 text-emerald-500" />
               </div>
-              <div className="mt-4 text-4xl font-black text-slate-950 dark:text-white">{item.data?.score ?? "--"}%</div>
+              <div className="mt-4 text-4xl font-black text-slate-950 dark:text-white">{item.data ? `${item.data.score}%` : "--"}</div>
+              {item.data && <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{item.data.methodLabel}</p>}
               <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
                 {item.data?.summary ?? "No report saved yet. Open the module and generate one."}
               </p>
