@@ -1,13 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Sparkles } from "lucide-react";
-import { motion } from "framer-motion";
 
 export default function Navbar() {
-  const pathname = usePathname();
-
   return (
     <header className="fixed top-0 left-0 right-0 z-50 glass border-b-0 border-white/10">
       <div className="container mx-auto px-4 h-20 flex items-center justify-between">

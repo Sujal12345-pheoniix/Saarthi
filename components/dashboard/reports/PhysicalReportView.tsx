@@ -16,20 +16,10 @@ import {
   UploadCloud,
   Waves,
 } from "lucide-react";
+import type { ReportView } from "@/features/reports/view-model";
+import { apiRequest, newIdempotencyKey, pollAnalysis, uploadImage } from "@/lib/api/client";
 
-type PhysicalReport = {
-  title: string;
-  subtitle: string;
-  score: number;
-  confidence: number;
-  summary: string;
-  findings: string[];
-  recommendations: string[];
-  activities: string[];
-  metrics: { label: string; value: string; detail: string }[];
-  caution: string;
-  imageUrl?: string | null;
-};
+type PhysicalReport = ReportView;
 
 const defaultForm = {
   heightCm: 175,
@@ -65,138 +55,51 @@ export default function PhysicalReportView() {
   }, [preview]);
 
   useEffect(() => {
-    fetch("/api/reports/physical")
-      .then((response) => response.json())
+    apiRequest<{ report: PhysicalReport | null }>("/api/reports/physical")
       .then((data) => {
-        if (data?.report) {
-          setReport(data.report);
-        }
+        if (data.report) setReport(data.report);
       })
       .catch(() => undefined);
   }, []);
 
   const bmi = useMemo(() => formatBmi(form.heightCm, form.weightKg), [form.heightCm, form.weightKg]);
 
-  const uploadImage = async () => {
-    if (!file) {
-      return null;
-    }
-
-    setIsUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("folder", "saarthi/physical");
-
-      const response = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-      const responseText = await response.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(responseText);
-      } catch {
-        data = { error: responseText };
-      }
-
-      if (!response.ok) {
-        throw new Error(data?.error || "Unable to upload image.");
-      }
-
-      return data.url as string;
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
   const [analysisStatus, setAnalysisStatus] = useState<string>("");
 
   const handleGenerate = async () => {
     setIsGenerating(true);
-    setAnalysisStatus("Uploading");
     try {
-      const imageUrl = await uploadImage();
-      
-      setAnalysisStatus("Queuing job");
-      const queueResponse = await fetch("/api/analyze-fitness", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageUrl: imageUrl || "https://images.unsplash.com/photo-1517838277536-f5f99be501cd?q=80&w=600", // Fallback if no photo uploaded
-          questionnaire: {
-            ...form
-          },
-        }),
-      });
-
-      const queueData = await queueResponse.json();
-      if (!queueResponse.ok || !queueData.success) {
-        throw new Error(queueData?.error || "Unable to queue physical/fitness analysis.");
+      if (!file) {
+        // No photo: rule-based report from the answers. (Pre-Phase-1 code analysed a stock photo here.)
+        setAnalysisStatus("Generating report");
+        const data = await apiRequest<{ report: PhysicalReport }>("/api/reports/physical", { method: "POST", json: form });
+        setReport(data.report);
+        return;
       }
 
-      const { analysisId } = queueData;
-      setAnalysisStatus("QUEUED");
+      setAnalysisStatus("Uploading");
+      setIsUploading(true);
+      let assetId: string;
+      try {
+        ({ assetId } = await uploadImage(file, "physical"));
+      } finally {
+        setIsUploading(false);
+      }
 
-      // Start polling
-      return new Promise<void>((resolve, reject) => {
-        const interval = setInterval(async () => {
-          try {
-            const statusResponse = await fetch(`/api/report/${analysisId}`);
-            const statusData = await statusResponse.json();
-
-            if (!statusResponse.ok || !statusData.success) {
-              clearInterval(interval);
-              reject(new Error(statusData.error || "Failed to check analysis status."));
-              return;
-            }
-
-            if (statusData.status === "COMPLETED") {
-              clearInterval(interval);
-              const rep = statusData.report;
-              setReport({
-                title: "Physical Performance Report",
-                subtitle: `${form.goal} baseline analysis snapshot`,
-                score: rep.fitnessScore,
-                confidence: rep.confidence,
-                summary: rep.aiSummary,
-                findings: Array.isArray(rep.detectedIssues) ? rep.detectedIssues : JSON.parse(rep.detectedIssues || "[]"),
-                recommendations: Array.isArray(rep.recommendations) ? rep.recommendations : JSON.parse(rep.recommendations || "[]"),
-                activities: [
-                  "10-minute warm-up: shoulder rolls and squats.",
-                  "Take a short walk after largest meal.",
-                  "Incorporate daily core planks to stabilize spine."
-                ],
-                metrics: [
-                  { label: "Physical score", value: `${rep.fitnessScore}%`, detail: "Overall posture and fitness rating" },
-                  { label: "Posture score", value: `${rep.postureScore}%`, detail: "Joint alignment score" },
-                  { label: "Mobility score", value: `${rep.mobilityScore}%`, detail: "Functional movement range" },
-                  { label: "Confidence", value: `${rep.confidence}%`, detail: "Pose estimation confidence" }
-                ],
-                caution: "This is a wellness plan, not medical advice. If you have pain, dizziness, extreme fatigue, or rapid weight changes, get a licensed clinician involved.",
-                imageUrl: rep.imageUrl
-              });
-              setFile(null);
-              setAnalysisStatus("");
-              resolve();
-            } else if (statusData.status === "FAILED") {
-              clearInterval(interval);
-              reject(new Error(statusData.error || "Analysis failed during background processing."));
-            } else {
-              setAnalysisStatus(statusData.status); // e.g. "PROCESSING"
-            }
-          } catch (err) {
-            clearInterval(interval);
-            reject(err);
-          }
-        }, 1500);
+      setAnalysisStatus("Queuing job");
+      const queued = await apiRequest<{ analysisId: string; status: string }>("/api/analyze-fitness", {
+        method: "POST",
+        json: { assetId, questionnaire: form, idempotencyKey: newIdempotencyKey() },
       });
-
+      setAnalysisStatus(queued.status);
+      setReport(await pollAnalysis<PhysicalReport>(queued.analysisId, setAnalysisStatus));
+      setFile(null);
     } catch (error) {
       console.error(error);
       setAnalysisStatus("FAILED");
       alert(error instanceof Error ? error.message : "Something went wrong.");
     } finally {
+      setAnalysisStatus("");
       setIsGenerating(false);
     }
   };
@@ -290,12 +193,12 @@ export default function PhysicalReportView() {
                 <h2 className="text-2xl font-bold text-slate-950 dark:text-white">Daily inputs</h2>
                 <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">BMI now {bmi.toFixed(1)} and update-ready.</p>
               </div>
-              <div className="rounded-full bg-sky-500/10 px-4 py-2 text-sm font-semibold text-sky-700 dark:text-sky-300">confidence {report?.confidence ?? 89}%</div>
+              <div className="rounded-full bg-sky-500/10 px-4 py-2 text-sm font-semibold text-sky-700 dark:text-sky-300">{report ? report.confidenceLabel : file ? "Posture photo + answers" : "Answers only"}</div>
             </div>
 
             <div className="mt-6 grid gap-5">
               <label className="rounded-3xl border border-dashed border-slate-300 bg-white/80 p-5 dark:border-slate-700 dark:bg-slate-950/40">
-                <input type="file" accept="image/*" className="hidden" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+                <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
                 <div className="flex items-center gap-4">
                   <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-sky-500/10 text-sky-600 dark:text-sky-300"><UploadCloud className="h-7 w-7" /></div>
                   <div>
@@ -379,7 +282,7 @@ export default function PhysicalReportView() {
                 <div className="grid gap-3">
                   <div className="rounded-3xl bg-white/80 p-4 shadow-sm dark:bg-slate-950/50"><div className="flex items-center gap-2 font-semibold text-slate-950 dark:text-white"><ChefHat className="h-4 w-4 text-sky-500" /> Diet guidance</div><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Balanced meals, meal timing, and protein targets.</p></div>
                   <div className="rounded-3xl bg-white/80 p-4 shadow-sm dark:bg-slate-950/50"><div className="flex items-center gap-2 font-semibold text-slate-950 dark:text-white"><Trophy className="h-4 w-4 text-emerald-500" /> Weekly training plan</div><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Strength, mobility, and cardio structure.</p></div>
-                  <div className="rounded-3xl bg-white/80 p-4 shadow-sm dark:bg-slate-950/50"><div className="flex items-center gap-2 font-semibold text-slate-950 dark:text-white"><ImagePlus className="h-4 w-4 text-cyan-500" /> Photo-based trend scan</div><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Optional image storage in Cloudinary for progress review.</p></div>
+                  <div className="rounded-3xl bg-white/80 p-4 shadow-sm dark:bg-slate-950/50"><div className="flex items-center gap-2 font-semibold text-slate-950 dark:text-white"><ImagePlus className="h-4 w-4 text-cyan-500" /> Photo-based trend scan</div><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Optional photo: posture angles are measured from it and it is stored privately.</p></div>
                 </div>
               </div>
             ) : (

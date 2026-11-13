@@ -18,19 +18,10 @@ import {
   CheckCircle2,
   ChevronRight,
 } from "lucide-react";
+import type { ReportView } from "@/features/reports/view-model";
+import { apiRequest } from "@/lib/api/client";
 
-type MentalReport = {
-  title: string;
-  subtitle: string;
-  score: number;
-  confidence: number;
-  summary: string;
-  findings: string[];
-  recommendations: string[];
-  activities: string[];
-  metrics: { label: string; value: string; detail: string }[];
-  caution: string;
-};
+type MentalReport = ReportView;
 
 const moods = [
   { value: 1, label: "Sad", icon: CloudRain },
@@ -54,12 +45,9 @@ export default function MentalReportView() {
   const [isGenerating, setIsGenerating] = useState(false);
 
   useEffect(() => {
-    fetch("/api/reports/mental")
-      .then((response) => response.json())
+    apiRequest<{ report: MentalReport | null }>("/api/reports/mental")
       .then((data) => {
-        if (data?.report) {
-          setReport(data.report);
-        }
+        if (data.report) setReport(data.report);
       })
       .catch(() => undefined);
   }, []);
@@ -67,17 +55,7 @@ export default function MentalReportView() {
   const handleGenerate = async () => {
     setIsGenerating(true);
     try {
-      const response = await fetch("/api/reports/mental", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.error || "Unable to generate mental report.");
-      }
-
+      const data = await apiRequest<{ report: MentalReport }>("/api/reports/mental", { method: "POST", json: form });
       setReport(data.report);
     } catch (error) {
       console.error(error);
@@ -102,7 +80,7 @@ export default function MentalReportView() {
             </div>
 
             <h1 className="mt-6 text-4xl font-black tracking-tight text-slate-950 dark:text-white sm:text-5xl">
-              Mental health report with calm, practical, therapist-style guidance.
+              A calm, practical mental wellness check-in.
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600 dark:text-slate-300">
               This check-in focuses on mood, stress, sleep, and a short journal note so the advice feels specific, supportive, and useful for the next few hours.
@@ -151,7 +129,7 @@ export default function MentalReportView() {
                 <h2 className="text-2xl font-bold text-slate-950 dark:text-white">Mood inputs</h2>
                 <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Stress currently at {form.stress}%.</p>
               </div>
-              <div className="rounded-full bg-indigo-500/10 px-4 py-2 text-sm font-semibold text-indigo-700 dark:text-indigo-300">confidence {report?.confidence ?? 90}%</div>
+              <div className="rounded-full bg-indigo-500/10 px-4 py-2 text-sm font-semibold text-indigo-700 dark:text-indigo-300">{report ? report.confidenceLabel : "Self-reported check-in"}</div>
             </div>
 
             <div className="mt-6 grid gap-5">

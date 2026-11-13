@@ -11,7 +11,6 @@ import {
   Bot, 
   Settings,
   LogOut,
-  Sparkles
 } from "lucide-react";
 import { SignOutButton, useUser } from "@clerk/nextjs";
 
@@ -21,7 +20,7 @@ const navItems = [
   { name: "Mental Health", href: "/dashboard/mental", icon: Brain },
   { name: "Physical Health", href: "/dashboard/physical", icon: Activity },
   { name: "Reports", href: "/dashboard/reports", icon: FileText },
-  { name: "AI Recommendations", href: "/dashboard/ai", icon: Bot },
+  { name: "AI Companion", href: "/dashboard/ai", icon: Bot },
   { name: "Settings", href: "/dashboard/settings", icon: Settings },
 ];
 

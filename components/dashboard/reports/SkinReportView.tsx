@@ -14,20 +14,10 @@ import {
   UploadCloud,
   WandSparkles,
 } from "lucide-react";
+import type { ReportView } from "@/features/reports/view-model";
+import { apiRequest, newIdempotencyKey, pollAnalysis, uploadImage } from "@/lib/api/client";
 
-type SkinReport = {
-  title: string;
-  subtitle: string;
-  score: number;
-  confidence: number;
-  summary: string;
-  findings: string[];
-  recommendations: string[];
-  activities: string[];
-  metrics: { label: string; value: string; detail: string }[];
-  caution: string;
-  imageUrl?: string | null;
-};
+type SkinReport = ReportView;
 
 const skinTypes = ["Balanced", "Dry", "Oily", "Combination", "Sensitive"];
 const commonConcerns = ["Dry patches", "Acne marks", "Dullness", "Redness", "Oiliness", "Uneven texture"];
@@ -60,14 +50,9 @@ export default function SkinReportView() {
   useEffect(() => {
     let active = true;
 
-    fetch("/api/reports/skin")
-      .then((response) => response.json())
+    apiRequest<{ report: SkinReport | null }>("/api/reports/skin")
       .then((data) => {
-        if (!active || !data?.report) {
-          return;
-        }
-
-        setReport(data.report);
+        if (active && data.report) setReport(data.report);
       })
       .catch(() => undefined);
 
@@ -88,134 +73,51 @@ export default function SkinReportView() {
     });
   };
 
-  const uploadImage = async () => {
-    if (!file) {
-      return null;
-    }
-
-    setIsUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("folder", "saarthi/skin");
-
-      const response = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-      const responseText = await response.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(responseText);
-      } catch {
-        data = { error: responseText };
-      }
-
-      if (!response.ok) {
-        throw new Error(data?.error || "Unable to upload image.");
-      }
-
-      return data.url as string;
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
   const [analysisStatus, setAnalysisStatus] = useState<string>("");
+
+  const questionnaire = () => ({
+    skinType: form.skinType,
+    concerns: form.concerns,
+    hydration: form.hydration,
+    sunExposure: form.sunExposure,
+    sleepHours: form.sleepHours,
+  });
 
   const handleGenerate = async () => {
     setIsGenerating(true);
-    setAnalysisStatus("Uploading");
     try {
-      const imageUrl = await uploadImage();
-      if (!imageUrl) {
-        throw new Error("Failed to upload image. Please try again.");
+      if (!file) {
+        // No photo: rule-based estimate from the answers only (clearly labelled as such in the report).
+        setAnalysisStatus("Generating report");
+        const data = await apiRequest<{ report: SkinReport }>("/api/reports/skin", { method: "POST", json: questionnaire() });
+        setReport(data.report);
+        return;
+      }
+
+      setAnalysisStatus("Uploading");
+      setIsUploading(true);
+      let assetId: string;
+      try {
+        ({ assetId } = await uploadImage(file, "skin"));
+      } finally {
+        setIsUploading(false);
       }
 
       setAnalysisStatus("Queuing job");
-      const queueResponse = await fetch("/api/analyze-skin", {
+      const queued = await apiRequest<{ analysisId: string; status: string }>("/api/analyze-skin", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageUrl,
-          questionnaire: {
-            skinType: form.skinType,
-            concerns: form.concerns,
-            hydration: form.hydration,
-            sunExposure: form.sunExposure,
-            sleepHours: form.sleepHours,
-          },
-        }),
+        json: { assetId, questionnaire: questionnaire(), idempotencyKey: newIdempotencyKey() },
       });
-
-      const queueData = await queueResponse.json();
-      if (!queueResponse.ok || !queueData.success) {
-        throw new Error(queueData?.error || "Unable to queue skin analysis.");
-      }
-
-      const { analysisId } = queueData;
-      setAnalysisStatus("QUEUED");
-
-      // Start polling
-      return new Promise<void>((resolve, reject) => {
-        const interval = setInterval(async () => {
-          try {
-            const statusResponse = await fetch(`/api/report/${analysisId}`);
-            const statusData = await statusResponse.json();
-
-            if (!statusResponse.ok || !statusData.success) {
-              clearInterval(interval);
-              reject(new Error(statusData.error || "Failed to check analysis status."));
-              return;
-            }
-
-            if (statusData.status === "COMPLETED") {
-              clearInterval(interval);
-              // Map DB SkinReport structure to SkinReport component format
-              const rep = statusData.report;
-              setReport({
-                title: "Dermatology-style Skin Report",
-                subtitle: `${form.skinType} skin barrier analysis snapshot`,
-                score: rep.skinScore,
-                confidence: rep.confidence,
-                summary: rep.aiSummary,
-                findings: Array.isArray(rep.detectedIssues) ? rep.detectedIssues : JSON.parse(rep.detectedIssues || "[]"),
-                recommendations: Array.isArray(rep.recommendations) ? rep.recommendations : JSON.parse(rep.recommendations || "[]"),
-                activities: [
-                  "Apply a gentle cleanser, moisturizer, and SPF in the morning.",
-                  "Avoid harsh scrubs or physical exfoliators.",
-                  "Track skin redness daily to monitor improvements."
-                ],
-                metrics: [
-                  { label: "Skin score", value: `${rep.skinScore}%`, detail: "Overall barrier health index" },
-                  { label: "Hydration", value: `${rep.hydrationScore}%`, detail: "Internal water-binding capacity" },
-                  { label: "Acne severity", value: `${rep.acneSeverity}/100`, detail: "Inflammatory acne severity rating" },
-                  { label: "Confidence", value: `${rep.confidence}%`, detail: "AI model match confidence" }
-                ],
-                caution: "This report is supportive guidance, not a diagnosis. If you have persistent rash, acne flare-ups, pain, or pigment changes, a board-certified dermatologist should assess it.",
-                imageUrl: rep.imageUrl
-              });
-              setFile(null);
-              setAnalysisStatus("");
-              resolve();
-            } else if (statusData.status === "FAILED") {
-              clearInterval(interval);
-              reject(new Error(statusData.error || "Analysis failed during background processing."));
-            } else {
-              setAnalysisStatus(statusData.status); // e.g. "PROCESSING"
-            }
-          } catch (err) {
-            clearInterval(interval);
-            reject(err);
-          }
-        }, 1500);
-      });
-
+      setAnalysisStatus(queued.status);
+      const result = await pollAnalysis<SkinReport>(queued.analysisId, setAnalysisStatus);
+      setReport(result);
+      setFile(null);
     } catch (error) {
       console.error(error);
       setAnalysisStatus("FAILED");
       alert(error instanceof Error ? error.message : "Something went wrong.");
     } finally {
+      setAnalysisStatus("");
       setIsGenerating(false);
     }
   };
@@ -266,7 +168,7 @@ export default function SkinReportView() {
                     <Flame className="h-4 w-4" /> Live tracking ready
                   </div>
                   <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                    The first scan will generate your dermatologist-style report and save it to Neon.
+                    Your first report will be saved to your private history.
                   </p>
                 </div>
               )}
@@ -289,7 +191,7 @@ export default function SkinReportView() {
               <div className="absolute inset-x-10 top-8 h-1 rounded-full bg-emerald-400/70 shadow-[0_0_24px_rgba(52,211,153,0.9)]" />
               <div className="absolute inset-y-8 left-1/2 w-px bg-white/10" />
               <div className="absolute inset-x-0 bottom-6 text-center text-xs uppercase tracking-[0.4em] text-emerald-200/60">
-                scan depth 92%
+                computer-vision skin scan
               </div>
               <div className="relative flex h-60 w-60 items-center justify-center rounded-[2.25rem] border border-white/15 bg-white/5 p-3 backdrop-blur-xl">
                 <div className="absolute inset-3 rounded-[1.8rem] border border-emerald-300/25" />
@@ -324,7 +226,7 @@ export default function SkinReportView() {
                 <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Today: {selectedConcernSummary || "No concerns selected"}</p>
               </div>
               <div className="rounded-full bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-700 dark:text-emerald-300">
-                confidence {report?.confidence ?? 91}%
+                {report ? report.confidenceLabel : file ? "Photo + answers" : "Answers only"}
               </div>
             </div>
 
@@ -332,7 +234,7 @@ export default function SkinReportView() {
               <label className="rounded-3xl border border-dashed border-slate-300 bg-white/70 p-5 transition hover:border-emerald-400 dark:border-slate-700 dark:bg-slate-950/40">
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/jpeg,image/png,image/webp"
                   className="hidden"
                   onChange={(event) => setFile(event.target.files?.[0] ?? null)}
                 />
@@ -342,7 +244,7 @@ export default function SkinReportView() {
                   </div>
                   <div>
                     <div className="font-semibold text-slate-950 dark:text-white">Upload a face photo</div>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">Saved to Cloudinary for scan comparison and trend history.</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Optional. Stored privately; without a photo you get a rule-based estimate from your answers.</p>
                   </div>
                 </div>
                 {(preview || report?.imageUrl) && (
@@ -522,7 +424,7 @@ export default function SkinReportView() {
 
                 <div className="space-y-4 rounded-[1.75rem] border border-slate-200 bg-white/80 p-6 dark:border-slate-700 dark:bg-slate-950/40">
                   <div>
-                    <p className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-500">clinical snapshot</p>
+                    <p className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-500">summary · {report.methodLabel}</p>
                     <p className="mt-2 text-base leading-7 text-slate-700 dark:text-slate-300">{report.summary}</p>
                   </div>
 

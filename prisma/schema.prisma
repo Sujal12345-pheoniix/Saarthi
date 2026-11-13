@@ -1,3 +1,6 @@
+// Saarthi canonical data model (PostgreSQL + Prisma).
+// See docs/DATABASE_ARCHITECTURE.md for the rationale behind every table.
+
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["postgresqlExtensions"]
@@ -8,170 +11,473 @@ datasource db {
   extensions = [vector]
 }
 
-model User {
-  id                     String                   @id @default(cuid())
-  clerkId                String                   @unique
-  email                  String?
-  name                   String?
-  imageUrl               String?
-  age                    Int?
-  gender                 String?
-  lifestyle              String?
-  createdAt              DateTime                 @default(now())
-  updatedAt              DateTime                 @updatedAt
-  skinAnalyses           SkinAnalysis[]
-  skinReports            SkinReport[]
-  mentalHealthAnalyses   MentalHealthAnalysis[]
-  physicalHealthAnalyses PhysicalHealthAnalysis[]
-  fitnessReports         FitnessReport[]
-  analyses               Analysis[]
-  progressHistories      ProgressHistory[]
-  achievements           Achievement[]
-  wellnessReports        CombinedWellnessReport[]
-  dailyHabits            DailyHabits[]
-  conversations          AIConversation[]
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum UserRole {
+  USER
+  ADMIN
 }
 
-model SkinAnalysis {
-  id                  String   @id @default(cuid())
-  userId              String
-  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  imageUrl            String?
-  acneScore           Int
-  drynessScore        Int
-  oilinessScore       Int
-  pigmentationScore   Int
-  confidence          Float
-  aiSummary           String
-  recommendations     Json
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+enum WellnessDomain {
+  SKIN
+  PHYSICAL
+  MENTAL
+  COMBINED
 }
+
+enum AnalysisStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+/// How a report's numbers were produced. Never infer a stronger method than this.
+enum ReportMethod {
+  /// Computed by the Saarthi CV service from the user's own uploaded image.
+  COMPUTER_VISION
+  /// Deterministic formula over the user's questionnaire answers.
+  QUESTIONNAIRE_RULES
+  /// Narrative synthesis produced by a language model over stored reports.
+  LLM_SYNTHESIS
+  /// Created before Phase 1; provenance cannot be verified (may include LLM-fabricated scores).
+  LEGACY_UNVERIFIED
+}
+
+enum StorageProvider {
+  CLOUDINARY
+}
+
+enum AssetPurpose {
+  SKIN_SCAN
+  PHYSICAL_SCAN
+}
+
+enum AssetStatus {
+  ACTIVE
+  DELETED
+}
+
+enum ConsentType {
+  TERMS_OF_SERVICE
+  PRIVACY_POLICY
+  HEALTH_DATA_PROCESSING
+  IMAGE_PROCESSING
+  AI_PROCESSING
+}
+
+enum UnitSystem {
+  METRIC
+  IMPERIAL
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum RecommendationStatus {
+  ACTIVE
+  COMPLETED
+  DISMISSED
+}
+
+// ───────────────────────────── Identity ─────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  /// Clerk subject. The only externally-supplied identifier we trust, and only from a verified session.
+  clerkId   String   @unique
+  email     String?
+  name      String?
+  imageUrl  String?
+  role      UserRole @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile          UserProfile?
+  preferences      UserPreferences?
+  consents         ConsentRecord[]
+  assets           UploadedAsset[]
+  analyses         Analysis[]
+  skinReports      SkinReport[]
+  physicalReports  PhysicalReport[]
+  mentalReports    MentalWellnessReport[]
+  wellnessReports  CombinedWellnessReport[]
+  progressHistory  ProgressHistory[]
+  achievements     Achievement[]
+  dailyHabits      DailyHabit[]
+  journalEntries   JournalEntry[]
+  recommendations  Recommendation[]
+  conversations    AIConversation[]
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+}
+
+model UserProfile {
+  userId    String   @id
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  age       Int?
+  gender    String?
+  heightCm  Float?
+  weightKg  Float?
+  lifestyle String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model UserPreferences {
+  userId             String     @id
+  user               User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  unitSystem         UnitSystem @default(METRIC)
+  timezone           String     @default("UTC")
+  emailNotifications Boolean    @default(false)
+  /// Days to keep uploaded images. Null = keep until the user deletes them.
+  imageRetentionDays Int?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+}
+
+/// Append-only. The latest row per (userId, type) is the current state.
+model ConsentRecord {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type          ConsentType
+  granted       Boolean
+  policyVersion String
+  createdAt     DateTime    @default(now())
+
+  @@index([userId, type, createdAt])
+}
+
+// ───────────────────────────── Storage ─────────────────────────────
+
+model UploadedAsset {
+  id           String          @id @default(cuid())
+  userId       String
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider     StorageProvider @default(CLOUDINARY)
+  /// Provider object key (Cloudinary public_id). Never derived from client input.
+  storageKey   String          @unique
+  /// Cloudinary delivery type: "authenticated" for all Phase 1+ uploads.
+  deliveryType String          @default("authenticated")
+  purpose      AssetPurpose
+  /// Verified from file signature, not from the browser.
+  mimeType     String
+  format       String
+  sizeBytes    Int
+  width        Int
+  height       Int
+  sha256       String
+  status       AssetStatus     @default(ACTIVE)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  /// Set when the stored file is removed. The row is kept so reports keep a consistent reference.
+  deletedAt    DateTime?
+
+  analyses        Analysis[]
+  skinReports     SkinReport[]
+  physicalReports PhysicalReport[]
+
+  @@index([userId, createdAt])
+  @@index([userId, sha256])
+  @@index([status, createdAt])
+}
+
+// ───────────────────────────── Analysis lifecycle ─────────────────────────────
+
+/// One analysis job. Exactly one domain report (or none, if FAILED) points back to it.
+model Analysis {
+  id             String         @id @default(cuid())
+  userId         String
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain         WellnessDomain
+  status         AnalysisStatus @default(QUEUED)
+  /// Client-supplied key; duplicates for the same user return the original analysis.
+  idempotencyKey String?
+  inputAssetId   String?
+  inputAsset     UploadedAsset? @relation(fields: [inputAssetId], references: [id], onDelete: SetNull)
+  attempts       Int            @default(0)
+  errorCode      String?
+  /// User-safe message. Never contains provider bodies or stack traces.
+  errorMessage   String?
+  queuedAt       DateTime       @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  input          AnalysisInput?
+  result         AnalysisResult?
+  skinReport     SkinReport?
+  physicalReport PhysicalReport?
+  mentalReport   MentalWellnessReport?
+  combinedReport CombinedWellnessReport?
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@index([status, updatedAt])
+}
+
+/// Validated user input for an analysis (questionnaire answers). Separate table so it can be purged independently.
+model AnalysisInput {
+  analysisId    String   @id
+  analysis      Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  schemaVersion Int      @default(1)
+  questionnaire Json
+  createdAt     DateTime @default(now())
+}
+
+/// Raw engine output kept for audit and reproducibility.
+model AnalysisResult {
+  analysisId    String   @id
+  analysis      Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  engine        String
+  engineVersion String
+  rawOutput     Json
+  durationMs    Int?
+  createdAt     DateTime @default(now())
+}
+
+// ───────────────────────────── Reports ─────────────────────────────
 
 model SkinReport {
-  id                  String   @id @default(cuid())
-  userId              String
-  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  imageUrl            String?
-  skinScore           Int
-  hydrationScore      Int
-  acneSeverity        Int
-  confidence          Float
-  detectedIssues      Json     // Array of strings
-  recommendations     Json     // Array of strings
-  aiSummary           String
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
-}
-
-model MentalHealthAnalysis {
-  id              String   @id @default(cuid())
+  id              String         @id @default(cuid())
   userId          String
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  stressLevel     Int
-  anxietyLevel    Int
-  moodScore       Int
-  sleepScore      Int
-  burnoutRisk     Int
-  aiSummary       String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  analysisId      String?        @unique
+  analysis        Analysis?      @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  assetId         String?
+  asset           UploadedAsset? @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  method          ReportMethod
+  engineVersion   String?
+  skinScore       Int
+  hydrationScore  Int?
+  acneSeverity    Int?
+  /// Null when the method does not produce a calibrated confidence.
+  confidence      Float?
+  metrics         Json?
+  detectedIssues  Json
   recommendations Json
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  summary         String
+  /// Pre-Phase-1 public image URL. New reports reference `assetId` instead.
+  imageUrl        String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([userId, createdAt])
 }
 
-model PhysicalHealthAnalysis {
-  id              String   @id @default(cuid())
+model PhysicalReport {
+  id              String         @id @default(cuid())
   userId          String
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  bmi             Float?
-  hydration       Int
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  analysisId      String?        @unique
+  analysis        Analysis?      @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  assetId         String?
+  asset           UploadedAsset? @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  method          ReportMethod
+  engineVersion   String?
   fitnessScore    Int
-  activityLevel   String
-  sleepHours      Float
-  aiSummary       String
+  postureScore    Int?
+  mobilityScore   Int?
+  balanceScore    Int?
+  symmetryScore   Int?
+  bmi             Float?
+  sleepHours      Float?
+  waterLiters     Float?
+  workoutMinutes  Int?
+  activityLevel   String?
+  goal            String?
+  confidence      Float?
+  metrics         Json?
+  detectedIssues  Json
   recommendations Json
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  summary         String
+  imageUrl        String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([userId, createdAt])
 }
 
-model FitnessReport {
-  id                  String   @id @default(cuid())
-  userId              String
-  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  imageUrl            String?
-  fitnessScore        Int
-  postureScore        Int
-  mobilityScore       Int
-  confidence          Float
-  detectedIssues      Json     // Array of strings
-  recommendations     Json     // Array of strings
-  aiSummary           String
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+model MentalWellnessReport {
+  id              String       @id @default(cuid())
+  userId          String
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  analysisId      String?      @unique
+  analysis        Analysis?    @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  method          ReportMethod
+  engineVersion   String?
+  wellnessScore   Int
+  /// User-reported, 1-5.
+  moodRating      Int?
+  /// User-reported, 0-100.
+  stressLevel     Int?
+  /// User-reported, 1-5.
+  energyRating    Int?
+  sleepHours      Float?
+  confidence      Float?
+  metrics         Json?
+  recommendations Json
+  summary         String
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([userId, createdAt])
 }
 
-model Analysis {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type       String   // 'skin' | 'fitness' | 'mental'
-  status     String   // 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
-  error      String?
-  resultId   String?  // References SkinReport/FitnessReport id
-  imageUrl   String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+model CombinedWellnessReport {
+  id                 String       @id @default(cuid())
+  userId             String
+  user               User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  analysisId         String?      @unique
+  analysis           Analysis?    @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  method             ReportMethod @default(LLM_SYNTHESIS)
+  /// Arithmetic mean of the latest available domain scores. Never produced by the language model.
+  overallHealthScore Int?
+  aiInsights         String
+  risks              Json
+  actionPlan         Json
+  /// Provider/model that wrote the narrative, e.g. "anthropic:claude-sonnet-5-5".
+  model              String?
+  /// { skin?: id, physical?: id, mental?: id } — the reports this synthesis used.
+  sourceReportIds    Json?
+  generatedAt        DateTime     @default(now())
+
+  @@index([userId, generatedAt])
 }
+
+// ───────────────────────────── Tracking ─────────────────────────────
 
 model ProgressHistory {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  date       DateTime @default(now())
-  metricType String   // 'skin' | 'fitness'
-  score      Int
+  id             String         @id @default(cuid())
+  userId         String
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain         WellnessDomain
+  metric         String         @default("score")
+  value          Float
+  /// Report that produced this point. Null for rows created before Phase 1.
+  sourceReportId String?
+  recordedAt     DateTime       @default(now())
+
+  @@index([userId, domain, recordedAt])
 }
 
 model Achievement {
   id          String   @id @default(cuid())
   userId      String
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Stable code, e.g. "FIRST_SKIN_SCAN". Unique per user so concurrent jobs cannot award twice.
+  code        String?
   title       String
   description String
   unlockedAt  DateTime @default(now())
+
+  @@unique([userId, code])
+  @@index([userId, unlockedAt])
 }
 
-model CombinedWellnessReport {
-  id                 String   @id @default(cuid())
-  userId             String
-  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  overallHealthScore Int
-  aiInsights         String
-  risks              Json
-  actionPlan         Json
-  generatedAt        DateTime @default(now())
+model DailyHabit {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date            DateTime @db.Date
+  waterMl         Int?
+  steps           Int?
+  sleepHours      Float?
+  exerciseMinutes Int?
+  moodRating      Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userId, date])
 }
 
-model DailyHabits {
-  id          String   @id @default(cuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  date        DateTime @default(now())
-  waterIntake Int
-  steps       Int
-  sleep       Float
-  exercise    Int // in minutes
-  mood        Int
+model JournalEntry {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content    String
+  moodRating Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId, createdAt])
 }
+
+model Recommendation {
+  id             String               @id @default(cuid())
+  userId         String
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain         WellnessDomain
+  sourceReportId String?
+  text           String
+  priority       Int                  @default(0)
+  status         RecommendationStatus @default(ACTIVE)
+  completedAt    DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([userId, status, createdAt])
+}
+
+// ───────────────────────────── AI companion ─────────────────────────────
 
 model AIConversation {
-  id        String   @id @default(cuid())
+  id        String      @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role      String // 'user' or 'ai'
-  message   String
-  // Using pgvector
-  embedding Unsupported("vector(1536)")?
-  timestamp DateTime @default(now())
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  messages  AIMessage[]
+
+  @@index([userId, updatedAt])
 }
 
+model AIMessage {
+  id             String                       @id @default(cuid())
+  conversationId String
+  conversation   AIConversation               @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           MessageRole
+  content        String
+  /// pgvector embedding for retrieval (Phase 3).
+  embedding      Unsupported("vector(1536)")?
+  createdAt      DateTime                     @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+// ───────────────────────────── Platform ─────────────────────────────
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  body      String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt, createdAt])
+}
+
+/// Security-relevant events. Survives account deletion with the actor reference cleared.
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorUserId  String?
+  actor        User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  action       String
+  resourceType String?
+  resourceId   String?
+  requestId    String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+}

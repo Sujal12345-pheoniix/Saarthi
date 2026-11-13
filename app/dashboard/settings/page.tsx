@@ -1,28 +1,31 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { CheckCircle2, CloudCog, Database, ImageIcon, ShieldCheck } from "lucide-react";
+import { Database, Download, ImageIcon, ShieldCheck, CloudCog } from "lucide-react";
 
 const settings = [
   {
-    title: "Database",
+    title: "Your data",
     icon: Database,
-    description: "Neon + Prisma is now the primary store for user reports and summaries.",
+    description: "Reports are stored in a PostgreSQL database and are only ever queried for your own account.",
   },
   {
-    title: "Image storage",
+    title: "Photos",
     icon: ImageIcon,
-    description: "Cloudinary handles progress photos and scan images through the upload route.",
+    description:
+      "Photos are verified on upload and stored privately. They are only viewable through short-lived signed links.",
   },
   {
     title: "Security",
     icon: ShieldCheck,
-    description: "Clerk protects the dashboard and report APIs behind signed-in access.",
+    description:
+      "Every page and API request is authenticated with your Clerk session. Other users can never see your data.",
   },
   {
-    title: "Automation",
+    title: "How results are produced",
     icon: CloudCog,
-    description: "Reports are saved per user, so new scans update the latest analysis instead of fragmenting history.",
+    description:
+      "Each report states its method: computer vision on your photo, a rule-based estimate from your answers, or an AI-written synthesis.",
   },
 ];
 
@@ -30,10 +33,14 @@ export default function SettingsPage() {
   return (
     <div className="min-h-screen px-6 py-10 lg:px-10">
       <div className="mx-auto max-w-5xl space-y-8">
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass rounded-[2rem] border border-white/25 p-8 shadow-[0_24px_80px_rgba(15,23,42,0.08)]">
-          <h1 className="text-4xl font-black tracking-tight text-slate-950 dark:text-white">Settings and integrations.</h1>
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="glass rounded-[2rem] border border-white/25 p-8 shadow-[0_24px_80px_rgba(15,23,42,0.08)]"
+        >
+          <h1 className="text-4xl font-black tracking-tight text-slate-950 dark:text-white">Settings and privacy.</h1>
           <p className="mt-3 max-w-2xl text-base leading-7 text-slate-600 dark:text-slate-300">
-            The core integrations are now aligned with the requested stack: Prisma for Neon, Cloudinary for image uploads, and Clerk for access control.
+            How Saarthi stores and protects your information.
           </p>
         </motion.div>
 
@@ -62,11 +69,16 @@ export default function SettingsPage() {
 
         <div className="rounded-[2rem] border border-emerald-500/20 bg-emerald-500/5 p-6 text-sm leading-7 text-slate-700 dark:text-slate-300">
           <div className="flex items-center gap-2 font-semibold text-slate-950 dark:text-white">
-            <CheckCircle2 className="h-5 w-5 text-emerald-500" /> Quick checklist
+            <Download className="h-5 w-5 text-emerald-500" /> Download your data
           </div>
-          <p className="mt-2">
-            Confirm the Neon connection string in <span className="font-semibold">DATABASE_URL</span>, keep the Cloudinary credentials in .env, and run the Prisma migration before shipping this stack.
-          </p>
+          <p className="mt-2">Export everything Saarthi stores about you as a JSON file.</p>
+          <a
+            href="/api/account/export"
+            download="saarthi-export.json"
+            className="mt-4 inline-flex rounded-full bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white dark:bg-white dark:text-slate-950"
+          >
+            Export my data
+          </a>
         </div>
       </div>
     </div>

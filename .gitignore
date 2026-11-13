@@ -42,3 +42,12 @@ next-env.d.ts
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# keep the documented template
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+ai-service/.venv/
