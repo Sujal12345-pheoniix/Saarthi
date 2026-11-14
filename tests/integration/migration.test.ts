@@ -11,6 +11,11 @@ import pg from "pg";
 const MIGRATIONS = path.resolve(import.meta.dirname, "../../prisma/migrations");
 const baselineSql = readFileSync(path.join(MIGRATIONS, "20261113000000_baseline/migration.sql"), "utf8");
 const phase1Sql = readFileSync(path.join(MIGRATIONS, "20261113000100_phase1_foundation/migration.sql"), "utf8");
+const phase2Sql = readFileSync(path.join(MIGRATIONS, "20261113000200_phase2_ai_platform/migration.sql"), "utf8");
+const phase2DownSql = readFileSync(
+  path.resolve(import.meta.dirname, "../../prisma/rollbacks/20261113000200_phase2_ai_platform.down.sql"),
+  "utf8",
+);
 
 const adminUrl = new URL(process.env.TEST_DATABASE_URL!);
 const scratchName = `${adminUrl.pathname.slice(1)}_migration`;
@@ -153,6 +158,36 @@ describe("phase 1 migration on legacy data", () => {
     expect(await rows(`SELECT method, "overallHealthScore" FROM "CombinedWellnessReport"`)).toEqual([
       { method: "LEGACY_UNVERIFIED", overallHealthScore: 70 },
     ]);
+  });
+
+  it("phase 2 is additive: existing rows survive and queued work gets jobId = id", async () => {
+    const before = await rows(`SELECT count(*)::int AS n FROM "SkinReport"`);
+    await client.query(phase2Sql);
+    expect(await rows(`SELECT count(*)::int AS n FROM "SkinReport"`)).toEqual(before);
+    const withJob = await rows(`SELECT count(*)::int AS n FROM "Analysis" WHERE "jobId" IS NOT NULL AND "jobId" <> id`);
+    expect(withJob).toEqual([{ n: 0 }]);
+    const cols = await rows(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'Analysis' AND column_name IN ('jobId','modelVersion','promptVersion','inputMetadata','resultMetadata','cancelledAt') ORDER BY column_name`,
+    );
+    expect(cols.map((c) => c.column_name)).toEqual([
+      "cancelledAt",
+      "inputMetadata",
+      "jobId",
+      "modelVersion",
+      "promptVersion",
+      "resultMetadata",
+    ]);
+  });
+
+  it("phase 2 rollback script reverts cleanly (CANCELLED → FAILED) and the migration re-applies", async () => {
+    await client.query(`UPDATE "Analysis" SET status = 'CANCELLED' WHERE id = (SELECT id FROM "Analysis" ORDER BY id LIMIT 1)`);
+    await client.query(phase2DownSql);
+    expect(await rows(`SELECT to_regclass('"AiUsageEvent"') AS t`)).toEqual([{ t: null }]);
+    const enumValues = await rows(`SELECT unnest(enum_range(NULL::"AnalysisStatus"))::text AS v`);
+    expect(enumValues.map((r) => r.v)).not.toContain("CANCELLED");
+    expect(await rows(`SELECT count(*)::int AS n FROM "Analysis" WHERE "errorCode" = 'CANCELLED' AND status = 'FAILED'`)).toEqual([{ n: 1 }]);
+    await client.query(phase2Sql);
+    expect(await rows(`SELECT to_regclass('"AiUsageEvent"') AS t`)).toEqual([{ t: '"AiUsageEvent"' }]);
   });
 
   it("produces exactly the structure in schema.prisma (no drift)", () => {

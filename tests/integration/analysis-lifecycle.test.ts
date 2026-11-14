@@ -89,9 +89,16 @@ describe("analysis lifecycle", () => {
       skinScore: 82,
       confidence: null,
       assetId: asset.id,
-      engineVersion: "skin-cv@2",
+      engineVersion: "skin-cv@3",
     });
-    expect(a.result).toMatchObject({ engine: "saarthi-cv", engineVersion: "skin-cv@2" });
+    expect(a.result).toMatchObject({ engine: "saarthi-cv", engineVersion: "skin-cv@3" });
+    // Contract v3: structured, sourced measurements are kept with the report; unmeasurable values stay null.
+    expect(a.skinReport).toMatchObject({ hydrationScore: null, acneSeverity: null });
+    expect(a.skinReport!.metrics).toMatchObject({
+      contractVersion: "3",
+      measurements: [expect.objectContaining({ key: "reddishSpotCount", confidence: null })],
+      limitations: [expect.stringContaining("not a medical assessment")],
+    });
     expect(await db().progressHistory.count({ where: { userId: user.id, sourceReportId: a.skinReport!.id } })).toBe(1);
     expect(await db().achievement.count({ where: { userId: user.id, code: "FIRST_SKIN_SCAN" } })).toBe(1);
 
