@@ -186,6 +186,7 @@ export async function createCombinedAnalysis(
 export type AnalysisStatusView =
   | { analysisId: string; domain: WellnessDomain; status: "QUEUED" | "PROCESSING"; attempts: number }
   | { analysisId: string; domain: WellnessDomain; status: "FAILED"; errorCode: string | null; error: string }
+  | { analysisId: string; domain: WellnessDomain; status: "CANCELLED" }
   | { analysisId: string; domain: WellnessDomain; status: "COMPLETED"; report: ReportView | CombinedReportView };
 
 export function signedImageUrl(
@@ -234,5 +235,6 @@ export async function getAnalysisStatus(
     }
     return { analysisId: a.id, domain: a.domain, status: "COMPLETED", report };
   }
+  if (a.status === "CANCELLED") return { analysisId: a.id, domain: a.domain, status: "CANCELLED" };
   return { analysisId: a.id, domain: a.domain, status: a.status, attempts: a.attempts };
 }

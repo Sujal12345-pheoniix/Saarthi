@@ -14,6 +14,7 @@ const PROD_BASE = {
   CLOUDINARY_API_SECRET: "s",
   AI_SERVICE_URL: "https://ai.example",
   AI_SERVICE_TOKEN: "x".repeat(40),
+  FIELD_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
 function issuesOf(fn: () => unknown): string[] {
@@ -32,6 +33,34 @@ describe("environment validation", () => {
     expect(env.appEnv).toBe("production");
     expect(env.devAuthBypass).toBe(false);
     expect(env.aiService?.url).toBe("https://ai.example");
+    expect(env.fieldEncryptionKey?.length).toBe(32);
+  });
+
+  it("requires a field encryption key in production", () => {
+    const { FIELD_ENCRYPTION_KEY: _omit, ...rest } = PROD_BASE;
+    void _omit;
+    expect(issuesOf(() => parseEnv(rest)).join("\n")).toMatch(/FIELD_ENCRYPTION_KEY/);
+  });
+
+  it("rejects a field encryption key that is not 32 bytes", () => {
+    expect(issuesOf(() => parseEnv({ ...PROD_BASE, FIELD_ENCRYPTION_KEY: "c2hvcnQ=" })).join("\n")).toMatch(
+      /exactly 32 bytes/,
+    );
+  });
+
+  it("refuses inline analysis execution in production", () => {
+    expect(issuesOf(() => parseEnv({ ...PROD_BASE, ANALYSIS_EXECUTION_MODE: "inline" })).join("\n")).toMatch(
+      /ANALYSIS_EXECUTION_MODE/,
+    );
+  });
+
+  it("validates fallback providers and the price table", () => {
+    const issues = issuesOf(() =>
+      parseEnv({ ...PROD_BASE, LLM_FALLBACK_PROVIDERS: "gemini,bogus", LLM_PRICE_TABLE: "{not json" }),
+    ).join("\n");
+    expect(issues).toMatch(/unknown provider "bogus"/);
+    expect(issues).toMatch(/GEMINI_API_KEY: required when gemini is a fallback provider/);
+    expect(issues).toMatch(/LLM_PRICE_TABLE: must be valid JSON/);
   });
 
   it("lists every missing production variable by name", () => {
