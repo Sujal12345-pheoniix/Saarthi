@@ -34,12 +34,35 @@ describe("environment validation", () => {
     expect(env.devAuthBypass).toBe(false);
     expect(env.aiService?.url).toBe("https://ai.example");
     expect(env.fieldEncryptionKey?.length).toBe(32);
+    expect(env.warnings).toEqual([]);
   });
 
-  it("requires a field encryption key in production", () => {
+  it("warns (does not throw) when a production service is not configured", () => {
     const { FIELD_ENCRYPTION_KEY: _omit, ...rest } = PROD_BASE;
     void _omit;
-    expect(issuesOf(() => parseEnv(rest)).join("\n")).toMatch(/FIELD_ENCRYPTION_KEY/);
+    const env = parseEnv(rest);
+    expect(env.fieldEncryptionKey).toBeUndefined();
+    expect(env.warnings.join("\n")).toMatch(/FIELD_ENCRYPTION_KEY: not set/);
+  });
+
+  it("starts with the variables of a pre-Phase-1 deployment instead of failing every request", () => {
+    // Regression: a throwing config check in instrumentation made the whole site return 500.
+    const env = parseEnv({
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://u:p@db.example:5432/saarthi",
+      CLERK_SECRET_KEY: "sk_live_x",
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "pk_live_x",
+      UPSTASH_REDIS_REST_URL: "https://eu1-x.upstash.io",
+      UPSTASH_REDIS_REST_TOKEN: "tok",
+      AI_SERVICE_URL: "https://saarthi-ai.onrender.com",
+      GEMINI_API_KEY: "g",
+      VERCEL_PROJECT_PRODUCTION_URL: "saarthi.example.app",
+    });
+    expect(env.appUrl).toBe("https://saarthi.example.app");
+    const warned = env.warnings.join("\n");
+    for (const name of ["CLOUDINARY_CLOUD_NAME", "AI_SERVICE_TOKEN", "FIELD_ENCRYPTION_KEY"]) {
+      expect(warned).toContain(name);
+    }
   });
 
   it("rejects a field encryption key that is not 32 bytes", () => {
@@ -48,8 +71,8 @@ describe("environment validation", () => {
     );
   });
 
-  it("refuses inline analysis execution in production", () => {
-    expect(issuesOf(() => parseEnv({ ...PROD_BASE, ANALYSIS_EXECUTION_MODE: "inline" })).join("\n")).toMatch(
+  it("warns about inline analysis execution in production", () => {
+    expect(parseEnv({ ...PROD_BASE, ANALYSIS_EXECUTION_MODE: "inline" }).warnings.join("\n")).toMatch(
       /ANALYSIS_EXECUTION_MODE/,
     );
   });
@@ -63,18 +86,17 @@ describe("environment validation", () => {
     expect(issues).toMatch(/LLM_PRICE_TABLE: must be valid JSON/);
   });
 
-  it("lists every missing production variable by name", () => {
-    const issues = issuesOf(() => parseEnv({ NODE_ENV: "production" }));
+  it("lists every unconfigured production service by name", () => {
+    const { warnings } = parseEnv({ NODE_ENV: "production" });
     for (const name of [
       "DATABASE_URL",
       "CLERK_SECRET_KEY",
-      "APP_URL",
       "CLOUDINARY_CLOUD_NAME",
       "AI_SERVICE_URL",
       "AI_SERVICE_TOKEN",
       "REDIS_URL",
     ]) {
-      expect(issues.some((i) => i.startsWith(name))).toBe(true);
+      expect(warnings.some((w) => w.startsWith(name))).toBe(true);
     }
   });
 

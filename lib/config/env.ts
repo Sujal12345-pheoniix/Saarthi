@@ -91,6 +91,8 @@ export interface ServerEnv {
   nodeEnv: "development" | "test" | "production";
   appEnv: AppEnvName;
   appUrl?: string;
+  /** Services not configured in staging/production (names and affected features only, never values). */
+  warnings: string[];
   allowedOrigins: string[];
   logLevel: "debug" | "info" | "warn" | "error";
   databaseUrl?: string;
@@ -223,30 +225,34 @@ export function parseEnv(source: Record<string, string | undefined>): ServerEnv 
   }
 
   // ── Staging / production rules ──
+  // `issues` (above and here) are misconfigurations that are unsafe to run with: they throw ConfigError.
+  // `warnings` are services that are simply not configured: the site keeps serving, and each affected feature
+  // answers 503 NOT_CONFIGURED when used. A missing optional service must never take the whole website down.
+  const warnings: string[] = [];
   if (strict) {
-    const required: Array<[string, unknown]> = [
-      ["DATABASE_URL", raw.DATABASE_URL],
-      ["CLERK_SECRET_KEY", raw.CLERK_SECRET_KEY],
-      ["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", raw.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY],
-      ["APP_URL", raw.APP_URL],
-      ["CLOUDINARY_CLOUD_NAME", raw.CLOUDINARY_CLOUD_NAME],
-      ["AI_SERVICE_URL", raw.AI_SERVICE_URL],
-      ["AI_SERVICE_TOKEN", raw.AI_SERVICE_TOKEN],
-      ["FIELD_ENCRYPTION_KEY", raw.FIELD_ENCRYPTION_KEY],
+    const recommended: Array<[string, unknown, string]> = [
+      ["DATABASE_URL", raw.DATABASE_URL, "all signed-in features"],
+      ["CLERK_SECRET_KEY", raw.CLERK_SECRET_KEY, "sign-in"],
+      ["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", raw.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY, "sign-in"],
+      ["CLOUDINARY_CLOUD_NAME", raw.CLOUDINARY_CLOUD_NAME, "image uploads"],
+      ["AI_SERVICE_URL", raw.AI_SERVICE_URL, "skin and posture image analysis"],
+      ["AI_SERVICE_TOKEN", raw.AI_SERVICE_TOKEN, "skin and posture image analysis (the CV service requires it)"],
+      ["FIELD_ENCRYPTION_KEY", raw.FIELD_ENCRYPTION_KEY, "encrypted journal and companion messages"],
     ];
-    for (const [name, value] of required) {
-      if (!value) issues.push(`${name}: required when APP_ENV=${appEnv}`);
+    for (const [name, value, feature] of recommended) {
+      if (!value) warnings.push(`${name}: not set — ${feature} unavailable`);
     }
     if (raw.ANALYSIS_EXECUTION_MODE === "inline") {
-      // Expensive inference must not run inside serverless request handlers in deployed environments.
-      issues.push(
-        `ANALYSIS_EXECUTION_MODE: "inline" is not allowed when APP_ENV=${appEnv}; deploy the worker and use "queue"`,
+      // Inline inference runs inside the request and is subject to the platform's request timeout.
+      warnings.push(
+        `ANALYSIS_EXECUTION_MODE: "inline" processes image analyses inside web requests (subject to the platform timeout); deploy the worker and use "queue"`,
       );
     }
     if (raw.ANALYSIS_EXECUTION_MODE === "queue" && !redisUrl) {
-      issues.push(`REDIS_URL: required when APP_ENV=${appEnv} and ANALYSIS_EXECUTION_MODE=queue`);
+      warnings.push("REDIS_URL: not set — queued image analyses and combined reports unavailable");
     }
     if (raw.AI_SERVICE_URL && !raw.AI_SERVICE_URL.startsWith("https://")) {
+      // The service token would travel in clear text.
       issues.push("AI_SERVICE_URL: must use https in staging/production");
     }
   }
@@ -258,7 +264,11 @@ export function parseEnv(source: Record<string, string | undefined>): ServerEnv 
   return {
     nodeEnv: raw.NODE_ENV,
     appEnv,
-    appUrl: raw.APP_URL,
+    // On Vercel, fall back to the platform-provided production hostname.
+    appUrl:
+      raw.APP_URL ??
+      (source.VERCEL_PROJECT_PRODUCTION_URL ? `https://${source.VERCEL_PROJECT_PRODUCTION_URL}` : undefined),
+    warnings,
     allowedOrigins: raw.ALLOWED_ORIGINS,
     logLevel: raw.LOG_LEVEL,
     databaseUrl: raw.DATABASE_URL,

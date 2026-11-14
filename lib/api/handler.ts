@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { requireUser, type SessionUser } from "@/lib/auth/session";
-import { getEnv } from "@/lib/config/env";
+import { ConfigError, getEnv } from "@/lib/config/env";
 import { logger, type Logger } from "@/lib/logging/logger";
 import { getProducerConnection } from "@/lib/queue/connection";
 import { assertSameOrigin } from "@/lib/security/origin";
@@ -77,6 +78,24 @@ export function jsonError(error: AppError, requestId: string): Response {
 
 function toAppError(error: unknown): AppError {
   if (isAppError(error)) return error;
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    (error.code === "P2021" || error.code === "P2022")
+  ) {
+    // Table/column missing: the database has not been migrated to this release (see docs/deployment).
+    logger.error("database.schema_outdated", { code: error.code, hint: "run `npm run db:migrate:deploy`" });
+    return new AppError("SERVICE_UNAVAILABLE", "The service is being updated. Please try again shortly.", 503, {
+      expose: true,
+      cause: error,
+    });
+  }
+  if (error instanceof ConfigError) {
+    // Fail closed. Variable names are logged server-side (instrumentation.ts), never returned to clients.
+    return new AppError("SERVICE_UNAVAILABLE", "The service is temporarily unavailable.", 503, {
+      expose: true,
+      cause: error,
+    });
+  }
   return new AppError("INTERNAL_ERROR", "Internal error", 500, { expose: false, cause: error });
 }
 
