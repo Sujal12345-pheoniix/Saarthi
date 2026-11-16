@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { v2 as cloudinary } from "cloudinary";
-import type { AssetPurpose } from "@prisma/client";
+import type { AssetPurpose, StorageProvider as StorageProviderName } from "@prisma/client";
 import { getEnv } from "@/lib/config/env";
 import { safeFetchBytes } from "@/lib/security/safe-fetch";
+import { LocalFileStorage, localSigningKey } from "./local-storage";
 
 /**
- * Object storage abstraction. Cloudinary is the implementation; tests inject an in-memory store.
+ * Object storage abstraction. Cloudinary in deployed environments; local files in development
+ * (lib/storage/local-storage.ts); tests inject an in-memory store.
  *
  * Security properties (docs/SECURITY_ARCHITECTURE.md § Storage):
  * - Object keys are generated on the server: saarthi/<appEnv>/users/<internalUserId>/<purpose>/<uuid>.
@@ -22,10 +24,12 @@ export interface StoredObject {
 }
 
 export interface StorageProvider {
+  /** Recorded on UploadedAsset.provider. Defaults to CLOUDINARY when omitted (test doubles). */
+  readonly providerName?: StorageProviderName;
   upload(input: { bytes: Uint8Array; userId: string; purpose: AssetPurpose; format: string }): Promise<StoredObject>;
   signedUrl(object: { storageKey: string; deliveryType: string; format: string }, ttlSeconds?: number): string;
   download(object: { storageKey: string; deliveryType: string; format: string; mimeType: string }): Promise<Uint8Array>;
-  remove(object: { storageKey: string; deliveryType: string }): Promise<void>;
+  remove(object: { storageKey: string; deliveryType: string; format?: string }): Promise<void>;
 }
 
 export const SIGNED_URL_TTL_SECONDS = 300;
@@ -39,6 +43,7 @@ export function buildStorageKey(appEnv: string, userId: string, purpose: AssetPu
 }
 
 class CloudinaryStorage implements StorageProvider {
+  readonly providerName = "CLOUDINARY" as const;
   constructor(
     private readonly cfg: { cloudName: string; apiKey: string; apiSecret: string },
     private readonly appEnv: string,
@@ -103,14 +108,24 @@ let instance: StorageProvider | undefined;
 
 export function setStorageForTesting(provider: StorageProvider | undefined) {
   override = provider;
+  instance = undefined;
 }
 
-/** Returns null when storage is not configured (development without Cloudinary). */
+/**
+ * Cloudinary when configured; otherwise, in local development only, private files under .data/uploads.
+ * Returns null when neither is available (staging/production without Cloudinary).
+ */
 export function getStorage(): StorageProvider | null {
   if (override) return override;
   if (instance) return instance;
   const env = getEnv();
-  if (!env.cloudinary) return null;
-  instance = new CloudinaryStorage(env.cloudinary, env.appEnv);
+  if (env.cloudinary) {
+    instance = new CloudinaryStorage(env.cloudinary, env.appEnv);
+  } else if (env.localStorageDir) {
+    const secret = env.aiService?.token ?? env.databaseUrl ?? "saarthi-dev";
+    instance = new LocalFileStorage(env.localStorageDir, env.appEnv, localSigningKey(secret));
+  } else {
+    return null;
+  }
   return instance;
 }

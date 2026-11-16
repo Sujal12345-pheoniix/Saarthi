@@ -17,6 +17,15 @@ const phase2DownSql = readFileSync(
   "utf8",
 );
 
+const localStorageSql = readFileSync(
+  path.join(MIGRATIONS, "20261116000000_local_storage_provider/migration.sql"),
+  "utf8",
+);
+const localStorageDownSql = readFileSync(
+  path.resolve(import.meta.dirname, "../../prisma/rollbacks/20261116000000_local_storage_provider.down.sql"),
+  "utf8",
+);
+
 const adminUrl = new URL(process.env.TEST_DATABASE_URL!);
 const scratchName = `${adminUrl.pathname.slice(1)}_migration`;
 const scratchUrl = new URL(adminUrl.toString());
@@ -188,6 +197,17 @@ describe("phase 1 migration on legacy data", () => {
     expect(await rows(`SELECT count(*)::int AS n FROM "Analysis" WHERE "errorCode" = 'CANCELLED' AND status = 'FAILED'`)).toEqual([{ n: 1 }]);
     await client.query(phase2Sql);
     expect(await rows(`SELECT to_regclass('"AiUsageEvent"') AS t`)).toEqual([{ t: '"AiUsageEvent"' }]);
+  });
+
+  it("local storage provider is additive and its rollback removes only local-file assets", async () => {
+    await client.query(localStorageSql);
+    const values = async () =>
+      (await rows(`SELECT unnest(enum_range(NULL::"StorageProvider"))::text AS v`)).map((r) => r.v);
+    expect(await values()).toEqual(["CLOUDINARY", "LOCAL_FILESYSTEM"]);
+    await client.query(localStorageDownSql);
+    expect(await values()).toEqual(["CLOUDINARY"]);
+    await client.query(localStorageSql);
+    expect(await values()).toEqual(["CLOUDINARY", "LOCAL_FILESYSTEM"]);
   });
 
   it("produces exactly the structure in schema.prisma (no drift)", () => {

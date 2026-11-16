@@ -47,7 +47,7 @@ export async function uploadAsset(
     const asset = await db.uploadedAsset.create({
       data: {
         userId: args.userId,
-        provider: "CLOUDINARY",
+        provider: storage.providerName ?? "CLOUDINARY",
         storageKey: stored.storageKey,
         deliveryType: stored.deliveryType,
         purpose: args.purpose,

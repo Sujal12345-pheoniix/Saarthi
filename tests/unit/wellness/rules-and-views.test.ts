@@ -4,6 +4,7 @@ import { bmiOf, scoreMental, scorePhysical, scoreSkin } from "@/features/wellnes
 import { mentalQuestionnaireSchema, physicalQuestionnaireSchema } from "@/features/wellness/schemas";
 import { physicalReportView, skinReportView } from "@/features/reports/view-model";
 import { computeStreak } from "@/server/services/dashboard";
+import { SKIN_RESULT } from "../../helpers/fakes";
 
 describe("questionnaire rules", () => {
   it("BMI = kg / m²", () => {
@@ -128,6 +129,78 @@ describe("report view-model honesty", () => {
     );
     expect(view.confidenceLabel).toMatch(/Rule-based/);
     expect(view.methodLabel).toMatch(/answers/);
+    expect(view.detail).toBeNull();
+  });
+
+  it("exposes CV contract v3 measurements with units, and 'Not measured' for null values", () => {
+    const view = skinReportView(
+      {
+        ...base,
+        method: "COMPUTER_VISION",
+        skinScore: 59,
+        hydrationScore: null,
+        acneSeverity: null,
+        confidence: null,
+        metrics: {
+          ...SKIN_RESULT.metrics,
+          contractVersion: SKIN_RESULT.contractVersion,
+          imageQuality: SKIN_RESULT.imageQuality,
+          measurements: SKIN_RESULT.measurements,
+          observations: SKIN_RESULT.observations,
+          interpretations: SKIN_RESULT.interpretations,
+          limitations: SKIN_RESULT.limitations,
+          compositeFormula: SKIN_RESULT.compositeFormula,
+        },
+        detectedIssues: [],
+        recommendations: [],
+        summary: "s",
+      } as unknown as SkinReport,
+      null,
+    );
+    expect(view.detail).not.toBeNull();
+    expect(view.detail!.measurements).toHaveLength(SKIN_RESULT.measurements.length);
+    for (const [i, m] of SKIN_RESULT.measurements.entries()) {
+      const shown = view.detail!.measurements[i];
+      expect(shown.label).toBe(m.label);
+      if (m.value === null) expect(shown.value).toBe("Not measured");
+      else if (m.unit === "index_0_100") expect(shown.value).toBe(`${Math.round(m.value)}/100`);
+      else if (m.unit === "count") expect(shown.value).toBe(String(Math.round(m.value)));
+    }
+    expect(view.detail!.limitations).toEqual(SKIN_RESULT.limitations);
+    expect(view.detail!.imageQuality?.score).toBe(SKIN_RESULT.imageQuality.score);
+    // Tiles: the composite plus the first measurements — never the old "hydration" tile for v3 reports.
+    expect(view.metrics[0].label).toBe("Skin score");
+    expect(view.metrics.some((m) => /hydration/i.test(m.label))).toBe(false);
+  });
+
+  it("formats degrees and percents for posture measurements", () => {
+    const view = physicalReportView(
+      {
+        ...base,
+        method: "COMPUTER_VISION",
+        fitnessScore: 60,
+        postureScore: 47,
+        balanceScore: 75,
+        symmetryScore: 57,
+        mobilityScore: null,
+        confidence: null,
+        goal: null,
+        bmi: null,
+        waterLiters: null,
+        workoutMinutes: null,
+        metrics: {
+          measurements: [
+            { key: "shoulderTiltDeg", label: "Shoulder line tilt", value: 6.54, unit: "degrees", higherIs: "more_pronounced", source: "s", method: "m", confidence: null, explanation: "e", limitations: [] },
+            { key: "torsoSideLengthDiffPct", label: "Torso", value: 5.7, unit: "percent", higherIs: "more_pronounced", source: "s", method: "m", confidence: null, explanation: "e", limitations: [] },
+          ],
+        },
+        detectedIssues: [],
+        recommendations: [],
+        summary: "s",
+      } as unknown as PhysicalReport,
+      null,
+    );
+    expect(view.detail!.measurements.map((m) => m.value)).toEqual(["6.5°", "5.7%"]);
   });
 });
 

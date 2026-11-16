@@ -1,16 +1,18 @@
 import Navbar from "@/components/layout/Navbar";
-import Hero from "@/components/landing/Hero";
-import Features from "@/components/landing/Features";
-import HowItWorks from "@/components/landing/HowItWorks";
 import Footer from "@/components/layout/Footer";
+import Hero from "@/components/landing/Hero";
+import { FinalCta, Honest, HowItWorks, Pillars, Privacy } from "@/components/landing/Sections";
 
 export default function Home() {
   return (
-    <main className="min-h-screen flex flex-col pt-20">
+    <main className="flex min-h-screen flex-col overflow-x-clip">
       <Navbar />
       <Hero />
-      <Features />
+      <Pillars />
+      <Honest />
       <HowItWorks />
+      <Privacy />
+      <FinalCta />
       <Footer />
     </main>
   );

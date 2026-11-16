@@ -11,11 +11,17 @@ process.env.RATE_LIMIT_ENABLED = "false";
 process.env.AI_SERVICE_URL = "http://ai-service.test";
 process.env.AI_SERVICE_TOKEN = "test-token-0123456789-0123456789-abcdef";
 process.env.APP_URL = "http://localhost:3000";
-delete process.env.DEV_ALLOW_ANON;
-delete process.env.ANTHROPIC_API_KEY;
-delete process.env.GEMINI_API_KEY;
-delete process.env.OPENAI_API_KEY;
-delete process.env.CLOUDINARY_CLOUD_NAME;
+// Pinned (not deleted): modules that import "dotenv/config" would otherwise re-read a developer's local .env.
+process.env.DEV_ALLOW_ANON = "false";
+process.env.CLERK_SECRET_KEY = "sk_test_integration";
+process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = "pk_test_integration";
+process.env.LLM_PROVIDER = "none";
+process.env.ANTHROPIC_API_KEY = "";
+process.env.GEMINI_API_KEY = "";
+process.env.OPENAI_API_KEY = "";
+process.env.CLOUDINARY_CLOUD_NAME = "";
+process.env.CLOUDINARY_API_KEY = "";
+process.env.CLOUDINARY_API_SECRET = "";
 
 /**
  * Clerk is the only mocked boundary for HTTP-level tests: `auth()` returns whatever identity the test sets.

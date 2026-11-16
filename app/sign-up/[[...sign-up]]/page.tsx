@@ -1,9 +1,17 @@
 import { SignUp } from "@clerk/nextjs";
+import { AuthShell } from "@/components/auth/AuthShell";
 
 export default function Page() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900 py-12 px-4 sm:px-6 lg:px-8">
+    <AuthShell
+      title={
+        <>
+          Begin with <span className="italic text-white/60">one photo.</span>
+        </>
+      }
+      subtitle="Measured skin and posture analysis, gentle check-ins, and a plan that explains itself."
+    >
       <SignUp path="/sign-up" routing="path" signInUrl="/sign-in" forceRedirectUrl="/dashboard" />
-    </div>
+    </AuthShell>
   );
 }

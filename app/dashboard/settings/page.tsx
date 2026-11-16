@@ -1,86 +1,112 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { Database, Download, ImageIcon, ShieldCheck, CloudCog } from "lucide-react";
+import { Download, ImageIcon, KeyRound, Lock, ShieldCheck, Trash2, UserRound } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { PageHeader, Panel } from "@/components/analysis/primitives";
+import { useViewer } from "@/components/dashboard/viewer";
+import { Button, buttonClass } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
+import { apiRequest } from "@/lib/api/client";
 
-const settings = [
-  {
-    title: "Your data",
-    icon: Database,
-    description: "Reports are stored in a PostgreSQL database and are only ever queried for your own account.",
-  },
-  {
-    title: "Photos",
-    icon: ImageIcon,
-    description:
-      "Photos are verified on upload and stored privately. They are only viewable through short-lived signed links.",
-  },
-  {
-    title: "Security",
-    icon: ShieldCheck,
-    description:
-      "Every page and API request is authenticated with your Clerk session. Other users can never see your data.",
-  },
-  {
-    title: "How results are produced",
-    icon: CloudCog,
-    description:
-      "Each report states its method: computer vision on your photo, a rule-based estimate from your answers, or an AI-written synthesis.",
-  },
+const CONFIRM = "DELETE MY ACCOUNT";
+
+const facts = [
+  { icon: Lock, title: "Your data", body: "Reports are stored in Saarthi's database and every query is scoped to your account alone." },
+  { icon: ImageIcon, title: "Photos", body: "Verified on upload, stored privately, and only viewable through short-lived signed links." },
+  { icon: ShieldCheck, title: "Access", body: "Every page and API request is authenticated. Other users can never see your data." },
+  { icon: KeyRound, title: "How results are made", body: "Each report names its method: computer vision on your photo, a rule-based estimate from your answers, or an AI synthesis." },
 ];
 
 export default function SettingsPage() {
+  const viewer = useViewer();
+  const toast = useToast();
+  const router = useRouter();
+  const [confirmText, setConfirmText] = useState("");
+  const [deleting, setDeleting] = useState(false);
+
+  async function deleteAccount() {
+    setDeleting(true);
+    try {
+      const res = await apiRequest<{ identityDeleted: boolean }>("/api/account", { method: "DELETE", json: { confirm: CONFIRM } });
+      toast.success("Your data has been deleted", res.identityDeleted ? "Your sign-in account was removed too." : undefined);
+      setTimeout(() => router.replace("/"), 1200);
+    } catch (e) {
+      toast.error("Couldn't delete your account", e instanceof Error ? e.message : undefined);
+      setDeleting(false);
+    }
+  }
+
   return (
-    <div className="min-h-screen px-6 py-10 lg:px-10">
-      <div className="mx-auto max-w-5xl space-y-8">
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="glass rounded-[2rem] border border-white/25 p-8 shadow-[0_24px_80px_rgba(15,23,42,0.08)]"
-        >
-          <h1 className="text-4xl font-black tracking-tight text-slate-950 dark:text-white">Settings and privacy.</h1>
-          <p className="mt-3 max-w-2xl text-base leading-7 text-slate-600 dark:text-slate-300">
-            How Saarthi stores and protects your information.
+    <div className="mx-auto max-w-4xl space-y-8 px-5 py-10 sm:px-8 lg:py-14">
+      <PageHeader
+        eyebrow="Settings"
+        title={
+          <>
+            Settings &amp; <span className="italic text-ink-2">privacy.</span>
+          </>
+        }
+        description="Your account, and exactly how Saarthi handles your information."
+      />
+
+      <Panel className="flex items-center gap-5 p-6">
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-aurora text-lg font-semibold text-white">
+          {viewer?.imageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={viewer.imageUrl} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <UserRound className="h-6 w-6" />
+          )}
+        </div>
+        <div className="min-w-0">
+          <p className="font-medium text-ink">{viewer?.name ?? "Your account"}</p>
+          <p className="truncate text-sm text-ink-3">
+            {viewer?.localMode ? "Local development mode — no sign-in provider" : (viewer?.email ?? "")}
           </p>
-        </motion.div>
-
-        <div className="grid gap-5 md:grid-cols-2">
-          {settings.map((item, index) => {
-            const Icon = item.icon;
-            return (
-              <motion.div
-                key={item.title}
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.08 }}
-                className="rounded-[2rem] border border-white/25 bg-white/80 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)] dark:bg-slate-950/40"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="rounded-2xl bg-slate-950 p-3 text-white dark:bg-white dark:text-slate-950">
-                    <Icon className="h-6 w-6" />
-                  </div>
-                  <h2 className="text-xl font-bold text-slate-950 dark:text-white">{item.title}</h2>
-                </div>
-                <p className="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">{item.description}</p>
-              </motion.div>
-            );
-          })}
+          {viewer && (
+            <p className="mt-1 text-xs text-ink-3">Member since {new Date(viewer.memberSince).toLocaleDateString(undefined, { month: "long", year: "numeric" })}</p>
+          )}
         </div>
+      </Panel>
 
-        <div className="rounded-[2rem] border border-emerald-500/20 bg-emerald-500/5 p-6 text-sm leading-7 text-slate-700 dark:text-slate-300">
-          <div className="flex items-center gap-2 font-semibold text-slate-950 dark:text-white">
-            <Download className="h-5 w-5 text-emerald-500" /> Download your data
-          </div>
-          <p className="mt-2">Export everything Saarthi stores about you as a JSON file.</p>
-          <a
-            href="/api/account/export"
-            download="saarthi-export.json"
-            className="mt-4 inline-flex rounded-full bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white dark:bg-white dark:text-slate-950"
-          >
-            Export my data
-          </a>
-        </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {facts.map((f, i) => (
+          <Panel key={f.title} className="p-6" delay={0.04 * i}>
+            <f.icon className="h-5 w-5 text-brand" />
+            <h2 className="mt-4 font-semibold text-ink">{f.title}</h2>
+            <p className="mt-2 text-sm leading-6 text-ink-2">{f.body}</p>
+          </Panel>
+        ))}
       </div>
+
+      <Panel className="flex flex-col gap-5 p-6 sm:flex-row sm:items-center sm:justify-between" delay={0.1}>
+        <div>
+          <h2 className="flex items-center gap-2 font-semibold text-ink">
+            <Download className="h-4 w-4 text-ink-3" /> Download your data
+          </h2>
+          <p className="mt-1 text-sm text-ink-2">Everything Saarthi stores about you, as one JSON file.</p>
+        </div>
+        <a href="/api/account/export" download="saarthi-export.json" className={buttonClass("secondary")}>
+          Export my data
+        </a>
+      </Panel>
+
+      <Panel className="border-[color-mix(in_oklab,var(--danger)_30%,transparent)] p-6" delay={0.14}>
+        <h2 className="flex items-center gap-2 font-semibold text-danger">
+          <Trash2 className="h-4 w-4" /> Delete account
+        </h2>
+        <p className="mt-2 text-sm leading-6 text-ink-2">
+          Permanently deletes your photos, reports, check-ins and history{viewer?.localMode ? "" : ", then your sign-in account"}. This
+          can&apos;t be undone.
+        </p>
+        <label className="mt-5 block text-sm text-ink-2">
+          Type <span className="font-mono font-medium text-ink">{CONFIRM}</span> to confirm
+          <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} className="field mt-2 font-mono" autoComplete="off" />
+        </label>
+        <Button variant="danger" className="mt-4" disabled={confirmText !== CONFIRM || deleting} onClick={deleteAccount}>
+          {deleting ? "Deleting…" : "Delete everything"}
+        </Button>
+      </Panel>
     </div>
   );
 }

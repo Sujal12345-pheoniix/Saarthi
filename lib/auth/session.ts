@@ -39,6 +39,9 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     return devUser();
   }
 
+  // Without Clerk there is no identity provider: fail closed (401) instead of crashing in auth().
+  if (!env.clerk.secretKey) return null;
+
   const { userId: clerkId } = await auth();
   if (!clerkId) return null;
 

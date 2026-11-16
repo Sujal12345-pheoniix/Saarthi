@@ -1,342 +1,258 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
-import {
-  Activity,
-  ArrowRight,
-  ChefHat,
-  Dumbbell,
-  CheckCircle2,
-  ImagePlus,
-  ChevronRight,
-  RefreshCw,
-  Sparkles,
-  Trophy,
-  UploadCloud,
-  Waves,
-} from "lucide-react";
-import type { ReportView } from "@/features/reports/view-model";
-import { apiRequest, newIdempotencyKey, pollAnalysis, uploadImage } from "@/lib/api/client";
+import { AnimatePresence, motion } from "framer-motion";
+import { ArrowRight, ClipboardList, PersonStanding } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { AnalysisProgress } from "@/components/analysis/AnalysisProgress";
+import { PhotoDropzone } from "@/components/analysis/PhotoDropzone";
+import { ChipGroup, NumberField, PageHeader, Panel, Segmented, SliderField } from "@/components/analysis/primitives";
+import { ReportDisplay, ReportSkeleton } from "@/components/analysis/ReportDisplay";
+import { useAnalysisFlow } from "@/components/analysis/useAnalysisFlow";
+import { Button } from "@/components/ui/button";
+import { FITNESS_GOALS, type PhysicalQuestionnaire } from "@/features/wellness/schemas";
 
-type PhysicalReport = ReportView;
+const ACCENT = "var(--body)";
 
-const defaultForm = {
-  heightCm: 175,
-  weightKg: 72,
-  waterLiters: 2.2,
-  workoutMinutes: 40,
-  sleepHours: 7.5,
-  activityLevel: 3,
-  goal: "Fat loss + strength",
-};
-
-const goalOptions = ["Fat loss + strength", "Muscle gain", "Endurance", "General fitness"];
-
-function formatBmi(heightCm: number, weightKg: number) {
-  return weightKg / Math.pow(heightCm / 100, 2);
+function BodyGuide() {
+  return (
+    <svg viewBox="0 0 120 120" className="h-24 w-24" aria-hidden="true">
+      <rect x="22" y="4" width="76" height="112" rx="18" fill="none" stroke="var(--line-strong)" strokeDasharray="5 5" />
+      <g stroke="var(--body)" strokeWidth="2" strokeLinecap="round" fill="none">
+        <circle cx="60" cy="22" r="8" />
+        <path d="M60 30v34M44 40h32M44 40l-5 24M76 40l5 24M50 64h20M50 64l-2 40M70 64l2 40" />
+      </g>
+      <line x1="60" y1="8" x2="60" y2="112" stroke="var(--body)" strokeOpacity=".35" strokeDasharray="3 4" />
+    </svg>
+  );
 }
 
+const guide = {
+  title: "For a measurable photo",
+  tips: [
+    "Whole body visible, head to feet",
+    "Camera at chest height, 2–3 m away",
+    "Stand naturally, facing or side-on",
+    "Fitted clothing, plain background",
+  ],
+  illustration: <BodyGuide />,
+};
+
+const ACTIVITY = [
+  { value: "1", label: "Rest" },
+  { value: "2", label: "Light" },
+  { value: "3", label: "Moderate" },
+  { value: "4", label: "Active" },
+  { value: "5", label: "Athlete" },
+] as const;
+
+type Mode = "photo" | "answers";
+type ActivityValue = (typeof ACTIVITY)[number]["value"];
+
 export default function PhysicalReportView() {
-  const [form, setForm] = useState(defaultForm);
+  const flow = useAnalysisFlow<PhysicalQuestionnaire>("physical");
+  const [mode, setMode] = useState<Mode>("photo");
   const [file, setFile] = useState<File | null>(null);
-  const [report, setReport] = useState<PhysicalReport | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [heightCm, setHeightCm] = useState<number | "">("");
+  const [weightKg, setWeightKg] = useState<number | "">("");
+  const [form, setForm] = useState<Omit<PhysicalQuestionnaire, "heightCm" | "weightKg">>({
+    waterLiters: 2,
+    workoutMinutes: 30,
+    sleepHours: 7,
+    activityLevel: 3,
+    goal: "General fitness",
+  });
+  const resultRef = useRef<HTMLDivElement>(null);
 
-  const preview = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
+  const bodyValid =
+    (heightCm === "" || (heightCm >= 50 && heightCm <= 272)) && (weightKg === "" || (weightKg >= 20 && weightKg <= 400));
+  const bmi = useMemo(
+    () => (typeof heightCm === "number" && typeof weightKg === "number" && bodyValid ? weightKg / (heightCm / 100) ** 2 : null),
+    [heightCm, weightKg, bodyValid],
+  );
 
-  useEffect(() => {
-    return () => {
-      if (preview) {
-        URL.revokeObjectURL(preview);
-      }
+  const canRun = !flow.running && bodyValid && (mode === "answers" || file !== null);
+
+  async function generate() {
+    resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const questionnaire: PhysicalQuestionnaire = {
+      ...form,
+      ...(typeof heightCm === "number" ? { heightCm } : {}),
+      ...(typeof weightKg === "number" ? { weightKg } : {}),
     };
-  }, [preview]);
-
-  useEffect(() => {
-    apiRequest<{ report: PhysicalReport | null }>("/api/reports/physical")
-      .then((data) => {
-        if (data.report) setReport(data.report);
-      })
-      .catch(() => undefined);
-  }, []);
-
-  const bmi = useMemo(() => formatBmi(form.heightCm, form.weightKg), [form.heightCm, form.weightKg]);
-
-  const [analysisStatus, setAnalysisStatus] = useState<string>("");
-
-  const handleGenerate = async () => {
-    setIsGenerating(true);
-    try {
-      if (!file) {
-        // No photo: rule-based report from the answers. (Pre-Phase-1 code analysed a stock photo here.)
-        setAnalysisStatus("Generating report");
-        const data = await apiRequest<{ report: PhysicalReport }>("/api/reports/physical", { method: "POST", json: form });
-        setReport(data.report);
-        return;
-      }
-
-      setAnalysisStatus("Uploading");
-      setIsUploading(true);
-      let assetId: string;
-      try {
-        ({ assetId } = await uploadImage(file, "physical"));
-      } finally {
-        setIsUploading(false);
-      }
-
-      setAnalysisStatus("Queuing job");
-      const queued = await apiRequest<{ analysisId: string; status: string }>("/api/analyze-fitness", {
-        method: "POST",
-        json: { assetId, questionnaire: form, idempotencyKey: newIdempotencyKey() },
-      });
-      setAnalysisStatus(queued.status);
-      setReport(await pollAnalysis<PhysicalReport>(queued.analysisId, setAnalysisStatus));
-      setFile(null);
-    } catch (error) {
-      console.error(error);
-      setAnalysisStatus("FAILED");
-      alert(error instanceof Error ? error.message : "Something went wrong.");
-    } finally {
-      setAnalysisStatus("");
-      setIsGenerating(false);
-    }
-  };
+    const result = await flow.run(mode === "photo" ? file : null, questionnaire);
+    if (result) setFile(null);
+  }
 
   return (
-    <div className="relative min-h-screen overflow-hidden px-6 py-10 lg:px-10">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(14,165,233,0.16),transparent_30%),radial-gradient(circle_at_80%_25%,rgba(16,185,129,0.16),transparent_22%),linear-gradient(180deg,rgba(15,23,42,0.02),transparent_60%)]" />
-      <div className="pointer-events-none absolute left-0 top-28 h-80 w-80 rounded-full bg-sky-400/15 blur-3xl" />
-      <div className="pointer-events-none absolute right-0 top-44 h-72 w-72 rounded-full bg-emerald-400/15 blur-3xl" />
+    <div className="mx-auto max-w-6xl space-y-8 px-5 py-10 sm:px-8 lg:py-14">
+      <PageHeader
+        eyebrow="Posture & body"
+        accent={ACCENT}
+        title={
+          <>
+            Stand tall, <span className="italic text-ink-2">measurably.</span>
+          </>
+        }
+        description="A full-body photo gives real alignment angles — shoulder and hip tilt, head position, trunk lean. Your habits shape the plan around them."
+      />
 
-      <div className="relative mx-auto flex max-w-7xl flex-col gap-8">
-        <section className="grid gap-6 lg:grid-cols-[0.98fr_1.02fr]">
-          <motion.div
-            initial={{ opacity: 0, y: 18 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="glass rounded-[2rem] border border-white/25 p-8 shadow-[0_24px_80px_rgba(15,23,42,0.1)] backdrop-blur-xl"
-          >
-            <div className="flex flex-wrap gap-3 text-xs font-semibold uppercase tracking-[0.32em] text-sky-600 dark:text-sky-300">
-              <span className="inline-flex items-center gap-2 rounded-full bg-sky-500/10 px-3 py-1"><ChefHat className="h-3.5 w-3.5" /> Nutrition scan</span>
-              <span className="inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-1"><Dumbbell className="h-3.5 w-3.5" /> Workout planning</span>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+        <Panel className="p-6 sm:p-7">
+          <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+            <h2 className="text-lg font-semibold text-ink">
+              <span className="mr-2 font-mono text-sm text-ink-3">01</span>Your photo
+            </h2>
+            <div className="w-full sm:w-64">
+              <Segmented<Mode>
+                value={mode}
+                onChange={setMode}
+                options={[
+                  { value: "photo", label: "Photo" },
+                  { value: "answers", label: "Answers only" },
+                ]}
+              />
             </div>
-
-            <h1 className="mt-6 text-4xl font-black tracking-tight text-slate-950 dark:text-white sm:text-5xl">
-              Physical report for diet, training, hydration, and recovery.
-            </h1>
-            <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600 dark:text-slate-300">
-              This view combines a nutrition plan, a weekly workout rhythm, and an optional image scan so the whole analysis feels like a real progress review instead of a generic tracker.
-            </p>
-
-            <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              {report?.metrics?.map((metric) => (
-                <div key={metric.label} className="rounded-3xl border border-white/40 bg-white/80 p-4 shadow-sm dark:bg-slate-900/50">
-                  <p className="text-sm text-slate-500 dark:text-slate-400">{metric.label}</p>
-                  <div className="mt-2 text-2xl font-bold text-slate-950 dark:text-white">{metric.value}</div>
-                  <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{metric.detail}</p>
-                </div>
-              ))}
-
-              {!report && (
-                <div className="rounded-3xl border border-dashed border-sky-300/60 bg-sky-500/5 p-4 dark:border-sky-500/30">
-                  <div className="flex items-center gap-2 font-semibold text-sky-700 dark:text-sky-300"><Activity className="h-4 w-4" /> Weekly analysis ready</div>
-                  <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">Calculate your first report to get personalized meal and workout guidance.</p>
-                </div>
-              )}
-            </div>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 18 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.08 }}
-            className="relative overflow-hidden rounded-[2rem] border border-white/20 bg-slate-950 p-6 text-white shadow-[0_30px_90px_rgba(15,23,42,0.3)]"
-          >
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(14,165,233,0.28),transparent_30%),linear-gradient(160deg,rgba(15,23,42,1),rgba(2,6,23,0.9))]" />
-            <motion.div
-              animate={{ rotateX: [0, 10, 0, -8, 0], rotateY: [0, 8, 0, -5, 0] }}
-              transition={{ duration: 14, repeat: Infinity, ease: "easeInOut" }}
-              className="relative flex min-h-[320px] items-center justify-center"
-            >
-              <div className="absolute inset-x-8 top-10 h-1 rounded-full bg-sky-300/70 shadow-[0_0_24px_rgba(125,211,252,0.95)]" />
-              <div className="absolute inset-y-8 left-1/2 w-px bg-white/10" />
-              <div className="relative flex h-64 w-64 items-center justify-center rounded-[2rem] border border-white/15 bg-white/5 p-4 backdrop-blur-xl">
-                <div className="absolute inset-4 rounded-[1.6rem] border border-sky-300/20" />
-                <div className="absolute inset-8 rounded-[1.45rem] bg-sky-300/10 blur-2xl" />
-                <motion.div
-                  animate={{ y: [0, -8, 0], rotate: [0, 4, 0, -4, 0] }}
-                  transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
-                  className="relative z-10 flex h-40 w-40 items-center justify-center rounded-full border border-white/20 bg-slate-950/80"
-                >
-                  <div className="text-center">
-                    <Activity className="mx-auto mb-3 h-12 w-12 text-sky-300" />
-                    <div className="text-lg font-bold text-white">Metabolic scan</div>
-                    <div className="mt-1 text-xs uppercase tracking-[0.32em] text-sky-200/70">diet + workout engine</div>
-                  </div>
-                </motion.div>
-              </div>
-              <div className="absolute inset-x-0 bottom-6 text-center text-xs uppercase tracking-[0.35em] text-sky-100/60">recovery aware</div>
-            </motion.div>
-          </motion.div>
-        </section>
-
-        <section className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.12 }}
-            className="glass rounded-[2rem] border border-white/25 p-7 shadow-[0_20px_60px_rgba(15,23,42,0.08)]"
-          >
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-2xl font-bold text-slate-950 dark:text-white">Daily inputs</h2>
-                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">BMI now {bmi.toFixed(1)} and update-ready.</p>
-              </div>
-              <div className="rounded-full bg-sky-500/10 px-4 py-2 text-sm font-semibold text-sky-700 dark:text-sky-300">{report ? report.confidenceLabel : file ? "Posture photo + answers" : "Answers only"}</div>
-            </div>
-
-            <div className="mt-6 grid gap-5">
-              <label className="rounded-3xl border border-dashed border-slate-300 bg-white/80 p-5 dark:border-slate-700 dark:bg-slate-950/40">
-                <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
-                <div className="flex items-center gap-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-sky-500/10 text-sky-600 dark:text-sky-300"><UploadCloud className="h-7 w-7" /></div>
-                  <div>
-                    <div className="font-semibold text-slate-950 dark:text-white">Upload progress photo</div>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">Use this to keep a visual record of your physical analysis.</p>
-                  </div>
-                </div>
-                {(preview || report?.imageUrl) && <div className="mt-4 overflow-hidden rounded-2xl border border-white/30"><img src={preview || report?.imageUrl || '/saarthi-logo.png'} alt="Physical preview" className="h-56 w-full object-cover" /></div>}
-              </label>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-300">Height (cm)</label>
-                  <input type="number" value={form.heightCm} onChange={(event) => setForm((current) => ({ ...current, heightCm: Number(event.target.value) }))} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white" />
-                </div>
-                <div>
-                  <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-300">Weight (kg)</label>
-                  <input type="number" value={form.weightKg} onChange={(event) => setForm((current) => ({ ...current, weightKg: Number(event.target.value) }))} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white" />
-                </div>
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-300">Water intake</label>
-                  <input type="range" min="0" max="5" step="0.1" value={form.waterLiters} onChange={(event) => setForm((current) => ({ ...current, waterLiters: Number(event.target.value) }))} className="w-full accent-sky-500" />
-                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{form.waterLiters} L</div>
-                </div>
-                <div>
-                  <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-300">Workout minutes</label>
-                  <input type="range" min="0" max="180" step="5" value={form.workoutMinutes} onChange={(event) => setForm((current) => ({ ...current, workoutMinutes: Number(event.target.value) }))} className="w-full accent-emerald-500" />
-                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{form.workoutMinutes} min</div>
-                </div>
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-300">Sleep hours</label>
-                  <input type="range" min="4" max="10" step="0.5" value={form.sleepHours} onChange={(event) => setForm((current) => ({ ...current, sleepHours: Number(event.target.value) }))} className="w-full accent-indigo-500" />
-                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{form.sleepHours} hours</div>
-                </div>
-                <div>
-                  <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-300">Activity level</label>
-                  <input type="range" min="1" max="5" step="1" value={form.activityLevel} onChange={(event) => setForm((current) => ({ ...current, activityLevel: Number(event.target.value) }))} className="w-full accent-cyan-500" />
-                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Level {form.activityLevel}</div>
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-300">Goal</label>
-                <select value={form.goal} onChange={(event) => setForm((current) => ({ ...current, goal: event.target.value }))} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white">
-                  {goalOptions.map((option) => <option key={option}>{option}</option>)}
-                </select>
-              </div>
-
-              <button type="button" onClick={handleGenerate} disabled={isUploading || isGenerating} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-4 font-semibold text-white transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-slate-950">
-                {isGenerating ? (
-                  <span className="inline-flex items-center gap-2">
-                    <motion.span animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }}><Sparkles className="h-5 w-5" /></motion.span>
-                    {analysisStatus === "Uploading" && "Uploading photo..."}
-                    {analysisStatus === "Queuing job" && "Queuing analysis..."}
-                    {analysisStatus === "QUEUED" && "Waiting in queue..."}
-                    {analysisStatus === "PROCESSING" && "Running Pose Estimation (AI)..."}
-                    {!["Uploading", "Queuing job", "QUEUED", "PROCESSING"].includes(analysisStatus) && "Generating report..."}
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-2"><ArrowRight className="h-5 w-5" /> Generate physical report</span>
-                )}
-              </button>
-            </div>
-          </motion.div>
-
-          <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }} className="glass rounded-[2rem] border border-white/25 p-7 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-            {!report ? (
-              <div className="flex h-full min-h-[560px] flex-col justify-between rounded-[1.75rem] bg-gradient-to-b from-sky-500/10 to-emerald-500/5 p-6">
-                <div>
-                  <p className="text-sm font-semibold uppercase tracking-[0.35em] text-sky-600 dark:text-sky-300">report coverage</p>
-                  <h3 className="mt-4 text-2xl font-bold text-slate-950 dark:text-white">Diet plan, workout schedule, recovery, and progress scan.</h3>
-                  <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">The analysis focuses on the next actionable meal, the next workout block, and the recovery habits that actually move your score.</p>
-                </div>
-
-                <div className="grid gap-3">
-                  <div className="rounded-3xl bg-white/80 p-4 shadow-sm dark:bg-slate-950/50"><div className="flex items-center gap-2 font-semibold text-slate-950 dark:text-white"><ChefHat className="h-4 w-4 text-sky-500" /> Diet guidance</div><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Balanced meals, meal timing, and protein targets.</p></div>
-                  <div className="rounded-3xl bg-white/80 p-4 shadow-sm dark:bg-slate-950/50"><div className="flex items-center gap-2 font-semibold text-slate-950 dark:text-white"><Trophy className="h-4 w-4 text-emerald-500" /> Weekly training plan</div><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Strength, mobility, and cardio structure.</p></div>
-                  <div className="rounded-3xl bg-white/80 p-4 shadow-sm dark:bg-slate-950/50"><div className="flex items-center gap-2 font-semibold text-slate-950 dark:text-white"><ImagePlus className="h-4 w-4 text-cyan-500" /> Photo-based trend scan</div><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Optional photo: posture angles are measured from it and it is stored privately.</p></div>
-                </div>
-              </div>
+          </div>
+          <AnimatePresence mode="wait" initial={false}>
+            {mode === "photo" ? (
+              <motion.div key="photo" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                <PhotoDropzone
+                  file={file}
+                  onFile={setFile}
+                  existingUrl={flow.report?.imageUrl}
+                  guide={guide}
+                  accent={ACCENT}
+                  disabled={flow.running}
+                />
+              </motion.div>
             ) : (
-              <div className="space-y-6">
-                <div className="rounded-[1.75rem] bg-slate-950 p-6 text-white shadow-[0_18px_40px_rgba(15,23,42,0.2)]">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="text-sm uppercase tracking-[0.32em] text-sky-300">{report.title}</p>
-                      <h3 className="mt-2 text-2xl font-bold">{report.subtitle}</h3>
-                    </div>
-                    <div className="rounded-3xl bg-white/10 px-4 py-3 text-right">
-                      <div className="text-xs uppercase tracking-[0.3em] text-sky-300">score</div>
-                      <div className="text-3xl font-black text-white">{report.score}%</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-6 grid gap-4 sm:grid-cols-4">
-                    {report.metrics.map((metric) => (
-                      <div key={metric.label} className="rounded-3xl border border-white/10 bg-white/5 p-4"><p className="text-xs uppercase tracking-[0.26em] text-sky-300/80">{metric.label}</p><div className="mt-2 text-2xl font-bold text-white">{metric.value}</div><p className="mt-1 text-xs leading-5 text-slate-300">{metric.detail}</p></div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-4 rounded-[1.75rem] border border-slate-200 bg-white/80 p-6 dark:border-slate-700 dark:bg-slate-950/40">
-                  <div>
-                    <p className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-500">analysis snapshot</p>
-                    <p className="mt-2 text-base leading-7 text-slate-700 dark:text-slate-300">{report.summary}</p>
-                  </div>
-
-                  <div>
-                    <h4 className="mb-3 flex items-center gap-2 text-lg font-bold text-slate-950 dark:text-white"><Activity className="h-5 w-5 text-sky-500" /> Findings</h4>
-                    <div className="space-y-3">{report.findings.map((item) => <div key={item} className="flex items-start gap-3 rounded-2xl bg-slate-100/80 p-4 dark:bg-slate-900/70"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-sky-500" /><p className="text-sm leading-6 text-slate-600 dark:text-slate-300">{item}</p></div>)}</div>
-                  </div>
-
-                  <div>
-                    <h4 className="mb-3 flex items-center gap-2 text-lg font-bold text-slate-950 dark:text-white"><Dumbbell className="h-5 w-5 text-emerald-500" /> Recommendations</h4>
-                    <div className="space-y-3">{report.recommendations.map((item) => <div key={item} className="flex items-start gap-3 rounded-2xl border border-emerald-500/10 bg-emerald-500/5 p-4"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" /><p className="text-sm leading-6 text-slate-700 dark:text-slate-300">{item}</p></div>)}</div>
-                  </div>
-
-                  <div>
-                    <h4 className="mb-3 flex items-center gap-2 text-lg font-bold text-slate-950 dark:text-white"><Waves className="h-5 w-5 text-cyan-500" /> Suggested activities</h4>
-                    <div className="grid gap-3 sm:grid-cols-3">{report.activities.map((item) => <div key={item} className="rounded-2xl bg-slate-900 px-4 py-5 text-sm leading-6 text-white shadow-lg shadow-slate-950/20">{item}</div>)}</div>
-                  </div>
-
-                  <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm leading-6 text-amber-900 dark:text-amber-100">{report.caution}</div>
-
-                  <button type="button" onClick={() => { setReport(null); setFile(null); }} className="inline-flex items-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:scale-[1.01] dark:bg-white dark:text-slate-950">
-                    <RefreshCw className="h-4 w-4" /> Run another analysis
-                  </button>
-                </div>
-              </div>
+              <motion.div
+                key="answers"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="flex flex-col items-center rounded-3xl border border-line bg-bg-elevated px-6 py-14 text-center"
+              >
+                <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-surface-2 text-ink-2">
+                  <ClipboardList className="h-5 w-5" />
+                </span>
+                <p className="mt-4 font-medium text-ink">Answers-only estimate</p>
+                <p className="mt-2 max-w-sm text-sm leading-6 text-ink-2">
+                  A rule-based estimate from your habits. Posture angles need a photo — add one any time.
+                </p>
+              </motion.div>
             )}
-          </motion.div>
-        </section>
+          </AnimatePresence>
+        </Panel>
+
+        <Panel className="flex flex-col p-6 sm:p-7" delay={0.06}>
+          <h2 className="text-lg font-semibold text-ink">
+            <span className="mr-2 font-mono text-sm text-ink-3">02</span>Your routine
+          </h2>
+          <div className="mt-6 space-y-7">
+            <div>
+              <p className="mb-3 text-sm font-medium text-ink">Goal</p>
+              <ChipGroup
+                options={FITNESS_GOALS}
+                selected={[form.goal]}
+                onToggle={(v) => setForm((f) => ({ ...f, goal: v }))}
+                color={ACCENT}
+              />
+            </div>
+            <div>
+              <div className="grid grid-cols-2 gap-3">
+                <NumberField label="Height" unit="cm" value={heightCm} onChange={setHeightCm} min={50} max={272} placeholder="Optional" />
+                <NumberField label="Weight" unit="kg" value={weightKg} onChange={setWeightKg} min={20} max={400} step={0.1} placeholder="Optional" />
+              </div>
+              <p className={`mt-2 text-xs ${bodyValid ? "text-ink-3" : "text-danger"}`}>
+                {!bodyValid
+                  ? "Height must be 50–272 cm and weight 20–400 kg."
+                  : bmi !== null
+                    ? `BMI ${bmi.toFixed(1)} — calculated from what you entered.`
+                    : "Add both to include a calculated BMI. Leave empty to skip."}
+              </p>
+            </div>
+            <div>
+              <p className="mb-3 text-sm font-medium text-ink">Activity level</p>
+              <Segmented<ActivityValue>
+                value={String(form.activityLevel) as ActivityValue}
+                onChange={(v) => setForm((f) => ({ ...f, activityLevel: Number(v) }))}
+                options={ACTIVITY}
+              />
+            </div>
+            <SliderField
+              label="Exercise today"
+              value={form.workoutMinutes}
+              min={0}
+              max={180}
+              step={5}
+              onChange={(v) => setForm((f) => ({ ...f, workoutMinutes: v }))}
+              format={(v) => `${v} min`}
+              color={ACCENT}
+            />
+            <SliderField
+              label="Water today"
+              value={form.waterLiters}
+              min={0}
+              max={5}
+              step={0.1}
+              onChange={(v) => setForm((f) => ({ ...f, waterLiters: Math.round(v * 10) / 10 }))}
+              format={(v) => `${v.toFixed(1)} L`}
+              color={ACCENT}
+            />
+            <SliderField
+              label="Sleep last night"
+              value={form.sleepHours}
+              min={3}
+              max={11}
+              step={0.5}
+              onChange={(v) => setForm((f) => ({ ...f, sleepHours: v }))}
+              format={(v) => `${v} h`}
+              color={ACCENT}
+            />
+          </div>
+
+          <div className="mt-auto pt-8">
+            <Button variant="aurora" size="lg" className="group w-full" disabled={!canRun} onClick={generate}>
+              <PersonStanding className="h-5 w-5" />
+              {flow.running ? "Analysing…" : mode === "photo" ? "Analyse my posture" : "Create estimate"}
+              {!flow.running && <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />}
+            </Button>
+            {mode === "photo" && !file && !flow.running && (
+              <p className="mt-3 text-center text-xs text-ink-3">Add a photo to start, or switch to “Answers only”.</p>
+            )}
+          </div>
+        </Panel>
+      </div>
+
+      <div ref={resultRef} className="scroll-mt-24">
+        <AnimatePresence mode="wait">
+          {flow.running ? (
+            <motion.div key="progress" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              <AnalysisProgress stages={flow.stages} current={flow.stage} uploadPct={flow.uploadPct} accent={ACCENT} />
+            </motion.div>
+          ) : flow.loadingLatest ? (
+            <ReportSkeleton key="skeleton" />
+          ) : flow.report ? (
+            <motion.div key={flow.report.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+              <p className="eyebrow mb-4">Latest report</p>
+              <ReportDisplay report={flow.report} accent={ACCENT} />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="empty"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="card-quiet flex flex-col items-center px-6 py-16 text-center"
+            >
+              <PersonStanding className="h-8 w-8 text-ink-3" />
+              <p className="font-display mt-4 text-2xl text-ink">Your first posture report will appear here</p>
+              <p className="mt-2 max-w-md text-sm leading-6 text-ink-2">
+                {flow.lastError?.description ?? "It's saved privately to your history so you can track change over time."}
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

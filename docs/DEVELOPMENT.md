@@ -10,7 +10,7 @@
 
 ```bash
 npm install                      # also runs prisma generate
-cp .env.example .env             # fill Clerk keys at minimum; set AI_SERVICE_TOKEN to a random 64-hex string
+cp .env.example .env             # set AI_SERVICE_TOKEN to a random 64-hex string (see below for Clerk)
 npm run infra:up                 # PostgreSQL (saarthi + saarthi_test databases) and Redis
 npm run db:migrate:deploy        # apply migrations to DATABASE_URL
 npm run dev                      # web app on http://localhost:3000
@@ -18,7 +18,18 @@ npm run worker:dev               # in a second terminal: analysis worker
 docker compose up -d ai          # CV service on http://localhost:8000 (uses AI_SERVICE_TOKEN from your shell/.env)
 ```
 
-Without Cloudinary credentials, uploads return 503 `NOT_CONFIGURED`; questionnaire reports still work. Without an LLM key, combined reports fail with `LLM_NOT_CONFIGURED`.
+**Sign-in.** With `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` set, local sign-in uses Clerk. Without them, set
+`DEV_ALLOW_ANON=true`: the app renders without Clerk and every request runs as a "Local Developer" user. The bypass
+is refused unless `NODE_ENV=development` and `APP_ENV=development`; anywhere else, a missing Clerk key makes the
+dashboard redirect to /sign-in and every API route answer 401.
+
+**Photos.** With Cloudinary credentials, uploads go to Cloudinary as private assets. Without them, *in local development
+only*, photos are stored privately under `.data/uploads` (gitignored; override with `LOCAL_STORAGE_DIR`) and served
+through `/api/dev-storage` with short-lived HMAC-signed URLs (lib/storage/local-storage.ts). Staging and production
+never use local storage: without Cloudinary, uploads there return 503 `NOT_CONFIGURED`.
+
+**Combined reports** need an LLM provider key; without one the Reports page says so and the button is disabled. Skin,
+posture and mind reports work without it.
 
 ## Everyday commands
 

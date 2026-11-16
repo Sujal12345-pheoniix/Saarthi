@@ -20,6 +20,31 @@ export interface ReportMetricView {
   detail: string;
 }
 
+/** One computer-vision measurement, formatted for display (contract v3). */
+export interface MeasurementView {
+  key: string;
+  label: string;
+  /** Formatted with its unit, or "Not measured". */
+  value: string;
+  raw: number | null;
+  unit: string;
+  higherIs: "more_pronounced" | "better" | "neutral";
+  explanation: string;
+  method: string;
+  limitations: string[];
+}
+
+/** Structured detail from the CV engine. Null for questionnaire and pre-v3 reports. */
+export interface AnalysisDetailView {
+  engineVersion: string | null;
+  imageQuality: { score: number; width: number; height: number } | null;
+  measurements: MeasurementView[];
+  observations: string[];
+  interpretations: Array<{ text: string; caveat: string }>;
+  limitations: string[];
+  compositeFormula: string | null;
+}
+
 export interface ReportView {
   id: string;
   analysisId: string | null;
@@ -39,6 +64,7 @@ export interface ReportView {
   caution: string;
   imageUrl: string | null;
   createdAt: string;
+  detail: AnalysisDetailView | null;
 }
 
 export interface CombinedReportView {
@@ -70,6 +96,58 @@ export function toStringArray(value: unknown): string[] {
   return [];
 }
 
+const UNIT_SUFFIX: Record<string, (v: number) => string> = {
+  count: (v) => String(Math.round(v)),
+  index_0_100: (v) => `${Math.round(v)}/100`,
+  percent: (v) => `${v.toFixed(1).replace(/.0$/, "")}%`,
+  degrees: (v) => `${v.toFixed(1).replace(/.0$/, "")}°`,
+  ratio: (v) => v.toFixed(2),
+};
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const str = (v: unknown) => (typeof v === "string" ? v : "");
+
+/** Reads the CV contract v3 fields stored in report.metrics. Defensive: legacy rows simply return null. */
+export function analysisDetail(metrics: unknown, engineVersion: string | null = null): AnalysisDetailView | null {
+  if (!isObj(metrics) || !Array.isArray(metrics.measurements)) return null;
+  const measurements: MeasurementView[] = metrics.measurements.filter(isObj).map((m) => {
+    const raw = typeof m.value === "number" && Number.isFinite(m.value) ? m.value : null;
+    const unit = str(m.unit);
+    const higherIs = m.higherIs === "better" || m.higherIs === "neutral" ? m.higherIs : "more_pronounced";
+    return {
+      key: str(m.key),
+      label: str(m.label),
+      value: raw === null ? NOT_MEASURED : (UNIT_SUFFIX[unit] ?? String)(raw),
+      raw,
+      unit,
+      higherIs,
+      explanation: str(m.explanation),
+      method: str(m.method),
+      limitations: toStringArray(m.limitations),
+    };
+  });
+  const q = isObj(metrics.imageQuality) ? metrics.imageQuality : null;
+  return {
+    engineVersion,
+    imageQuality:
+      q && typeof q.score === "number" && typeof q.width === "number" && typeof q.height === "number"
+        ? { score: q.score, width: q.width, height: q.height }
+        : null,
+    measurements,
+    observations: Array.isArray(metrics.observations)
+      ? metrics.observations.filter(isObj).map((o) => str(o.text)).filter(Boolean)
+      : [],
+    interpretations: Array.isArray(metrics.interpretations)
+      ? metrics.interpretations
+          .filter(isObj)
+          .map((i) => ({ text: str(i.text), caveat: str(i.caveat) }))
+          .filter((i) => i.text)
+      : [],
+    limitations: toStringArray(metrics.limitations),
+    compositeFormula: str(metrics.compositeFormula) || null,
+  };
+}
+
 function confidenceLabel(method: ReportMethod, confidence: number | null): string {
   if (confidence !== null) {
     return method === "COMPUTER_VISION"
@@ -90,6 +168,7 @@ const MENTAL_CAUTION =
 export function skinReportView(r: SkinReport, imageUrl: string | null): ReportView {
   const m = (r.metrics ?? {}) as Record<string, number | null | undefined>;
   const isCv = r.method === "COMPUTER_VISION";
+  const detail = isCv ? analysisDetail(r.metrics) : null;
   return {
     id: r.id,
     analysisId: r.analysisId,
@@ -109,7 +188,12 @@ export function skinReportView(r: SkinReport, imageUrl: string | null): ReportVi
       "Avoid harsh scrubs and physical exfoliators.",
       "Note any irritation for 7 days to spot triggers.",
     ],
-    metrics: isCv
+    metrics: detail
+      ? [
+          { label: "Skin score", value: pct(r.skinScore), detail: "Composite of the measurements below" },
+          ...detail.measurements.slice(0, 3).map((x) => ({ label: x.label, value: x.value, detail: x.explanation })),
+        ]
+      : isCv
       ? [
           {
             label: "Skin score",
@@ -153,11 +237,13 @@ export function skinReportView(r: SkinReport, imageUrl: string | null): ReportVi
     caution: SKIN_CAUTION,
     imageUrl: imageUrl ?? null,
     createdAt: r.createdAt.toISOString(),
+    detail,
   };
 }
 
 export function physicalReportView(r: PhysicalReport, imageUrl: string | null): ReportView {
   const isCv = r.method === "COMPUTER_VISION";
+  const detail = isCv ? analysisDetail(r.metrics) : null;
   return {
     id: r.id,
     analysisId: r.analysisId,
@@ -205,6 +291,7 @@ export function physicalReportView(r: PhysicalReport, imageUrl: string | null): 
     caution: PHYSICAL_CAUTION,
     imageUrl: imageUrl ?? null,
     createdAt: r.createdAt.toISOString(),
+    detail,
   };
 }
 
@@ -246,6 +333,7 @@ export function mentalReportView(r: MentalWellnessReport): ReportView {
     caution: MENTAL_CAUTION,
     imageUrl: null,
     createdAt: r.createdAt.toISOString(),
+    detail: null,
   };
 }
 

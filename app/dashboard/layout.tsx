@@ -1,16 +1,13 @@
 import Sidebar from "@/components/dashboard/Sidebar";
+import { ViewerProvider } from "@/components/dashboard/viewer";
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
-      <Sidebar />
-      <main className="pl-64 flex-1">
-        {children}
-      </main>
-    </div>
+    <ViewerProvider>
+      <div className="min-h-screen bg-bg">
+        <Sidebar />
+        <main className="lg:pl-[264px]">{children}</main>
+      </div>
+    </ViewerProvider>
   );
 }

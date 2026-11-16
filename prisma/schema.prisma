@@ -67,6 +67,8 @@ enum ReportMethod {
 
 enum StorageProvider {
   CLOUDINARY
+  /// Development only (lib/storage/local-storage.ts). Never used in staging/production.
+  LOCAL_FILESYSTEM
 }
 
 enum AssetPurpose {
@@ -190,7 +192,7 @@ model UploadedAsset {
   userId       String
   user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   provider     StorageProvider @default(CLOUDINARY)
-  /// Provider object key (Cloudinary public_id). Never derived from client input.
+  /// Provider object key (Cloudinary public_id, or a relative path for LOCAL_FILESYSTEM). Never derived from client input.
   storageKey   String          @unique
   /// Cloudinary delivery type: "authenticated" for all Phase 1+ uploads.
   deliveryType String          @default("authenticated")

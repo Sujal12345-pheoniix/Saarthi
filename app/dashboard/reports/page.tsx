@@ -1,298 +1,267 @@
 "use client";
 
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  ArrowUpRight,
+  Brain,
+  CircleAlert,
+  ListChecks,
+  LoaderCircle,
+  PersonStanding,
+  ScanFace,
+  Sparkles,
+  TriangleAlert,
+} from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { ArrowRight, FileText, HeartPulse, Brain, Activity, Sparkles, Loader2, AlertTriangle, CheckSquare } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { PageHeader, ease } from "@/components/analysis/primitives";
+import { useViewer } from "@/components/dashboard/viewer";
+import { Button } from "@/components/ui/button";
+import { ScoreRing } from "@/components/ui/score-ring";
+import { useToast } from "@/components/ui/toast";
 import type { CombinedReportView, ReportView } from "@/features/reports/view-model";
-import { apiRequest, newIdempotencyKey, pollAnalysis } from "@/lib/api/client";
+import { apiRequest, isAbortError, newIdempotencyKey, pollAnalysis } from "@/lib/api/client";
 
-type ReportSummary = Pick<ReportView, "title" | "score" | "summary" | "methodLabel">;
-type CombinedReport = CombinedReportView;
+const DOMAINS = [
+  { key: "skin", title: "Skin", icon: ScanFace, color: "var(--skin)", href: "/dashboard/skin" },
+  { key: "physical", title: "Posture & body", icon: PersonStanding, color: "var(--body)", href: "/dashboard/physical" },
+  { key: "mental", title: "Mind", icon: Brain, color: "var(--mind)", href: "/dashboard/mental" },
+] as const;
 
-const reportCards = [
-  {
-    title: "Skin report",
-    href: "/dashboard/skin",
-    icon: HeartPulse,
-    accent: "from-emerald-500 to-cyan-400",
-    description: "Dermatologist-style scan with hydration, barrier, and UV guidance.",
-  },
-  {
-    title: "Physical report",
-    href: "/dashboard/physical",
-    icon: Activity,
-    accent: "from-sky-500 to-emerald-400",
-    description: "Diet analysis, workout schedule, recovery, and image tracking.",
-  },
-  {
-    title: "Mental report",
-    href: "/dashboard/mental",
-    icon: Brain,
-    accent: "from-indigo-500 to-sky-400",
-    description: "Psychology-style mood support, stress relief, and grounding.",
-  },
-];
+type DomainKey = (typeof DOMAINS)[number]["key"];
+
+function fmt(iso: string) {
+  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
 
 export default function ReportsPage() {
-  const [skin, setSkin] = useState<ReportSummary | null>(null);
-  const [physical, setPhysical] = useState<ReportSummary | null>(null);
-  const [mental, setMental] = useState<ReportSummary | null>(null);
-  const [combined, setCombined] = useState<CombinedReport | null>(null);
-  const [isCompiling, setIsCompiling] = useState(false);
-  const [compileStatus, setCompileStatus] = useState("");
+  const toast = useToast();
+  const viewer = useViewer();
+  const [latest, setLatest] = useState<Record<DomainKey, ReportView | null> | null>(null);
+  const [combined, setCombined] = useState<CombinedReportView | null | undefined>(undefined);
+  const [compiling, setCompiling] = useState(false);
+  const [status, setStatus] = useState("");
+  const abortRef = useRef<AbortController | null>(null);
 
-  const [compileError, setCompileError] = useState("");
-
-  const fetchLatestData = () => {
+  const load = useCallback((signal?: AbortSignal) => {
+    const domain = (key: DomainKey) => apiRequest<{ report: ReportView | null }>(`/api/reports/${key}`, { signal });
     Promise.all([
-      apiRequest<{ report: ReportSummary | null }>("/api/reports/skin"),
-      apiRequest<{ report: ReportSummary | null }>("/api/reports/physical"),
-      apiRequest<{ report: ReportSummary | null }>("/api/reports/mental"),
-      apiRequest<{ report: CombinedReport | null }>("/api/report/latest"),
+      domain("skin"),
+      domain("physical"),
+      domain("mental"),
+      apiRequest<{ report: CombinedReportView | null }>("/api/report/latest", { signal }),
     ])
-      .then(([skinData, physicalData, mentalData, latestCombined]) => {
-        setSkin(skinData.report);
-        setPhysical(physicalData.report);
-        setMental(mentalData.report);
-        setCombined(latestCombined.report);
+      .then(([s, p, m, c]) => {
+        setLatest({ skin: s.report, physical: p.report, mental: m.report });
+        setCombined(c.report);
       })
-      .catch(() => undefined);
-  };
+      .catch((e) => {
+        if (isAbortError(e)) return;
+        setLatest({ skin: null, physical: null, mental: null });
+        setCombined(null);
+        toast.error("Couldn't load your reports", e instanceof Error ? e.message : undefined);
+      });
+  }, [toast]);
 
   useEffect(() => {
-    fetchLatestData();
-  }, []);
+    const ctrl = new AbortController();
+    load(ctrl.signal);
+    return () => {
+      ctrl.abort();
+      abortRef.current?.abort();
+    };
+  }, [load]);
 
-  const STATUS_TEXT: Record<string, string> = {
-    QUEUED: "Waiting in queue...",
-    PROCESSING: "AI is writing your synthesis...",
-  };
+  const available = latest ? DOMAINS.filter((d) => latest[d.key]).length : 0;
+  const aiReady = viewer?.features.aiSynthesis ?? true;
 
-  const handleCompileReport = async () => {
-    setIsCompiling(true);
-    setCompileError("");
-    setCompileStatus("Queuing synthesis...");
+  async function compile() {
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setCompiling(true);
+    setStatus("Queuing synthesis…");
     try {
-      const queued = await apiRequest<{ analysisId: string; status: string }>("/api/report/generate", {
+      const queued = await apiRequest<{ analysisId: string }>("/api/report/generate", {
         method: "POST",
         json: { idempotencyKey: newIdempotencyKey() },
+        signal: ctrl.signal,
       });
-      const report = await pollAnalysis<CombinedReport>(queued.analysisId, (status) => setCompileStatus(STATUS_TEXT[status] ?? status), {
-        intervalMs: 2000,
-      });
+      const report = await pollAnalysis<CombinedReportView>(
+        queued.analysisId,
+        (s) => setStatus(s === "PROCESSING" ? "Reading your reports…" : "Waiting in queue…"),
+        { intervalMs: 2000, signal: ctrl.signal },
+      );
       setCombined(report);
+      toast.success("Combined report ready");
     } catch (e) {
-      setCompileError(e instanceof Error ? e.message : "Failed to compile report.");
+      if (!isAbortError(e)) toast.error("Couldn't compile the combined report", e instanceof Error ? e.message : undefined);
     } finally {
-      setIsCompiling(false);
+      setCompiling(false);
     }
-  };
-
-  const getArray = (val: unknown): string[] => (Array.isArray(val) ? val.filter((v): v is string => typeof v === "string") : []);
-
-  const parsedRisks = getArray(combined?.risks);
-  const parsedActionPlan = getArray(combined?.actionPlan);
-  const summaries = [
-    { label: "Skin", data: skin },
-    { label: "Physical", data: physical },
-    { label: "Mental", data: mental },
-  ];
+  }
 
   return (
-    <div className="min-h-screen px-6 py-10 lg:px-10">
-      <div className="mx-auto max-w-7xl space-y-8">
-        {/* Header */}
-        <motion.div 
-          initial={{ opacity: 0, y: 12 }} 
-          animate={{ opacity: 1, y: 0 }} 
-          className="glass rounded-[2rem] border border-white/25 p-8 shadow-[0_24px_80px_rgba(15,23,42,0.08)]"
-        >
-          <div className="inline-flex items-center gap-2 rounded-full bg-slate-900/5 px-3 py-1 text-xs font-semibold uppercase tracking-[0.35em] text-slate-600 dark:bg-white/10 dark:text-slate-300">
-            <FileText className="h-3.5 w-3.5" /> Reports hub
-          </div>
-          <h1 className="mt-5 text-4xl font-black tracking-tight text-slate-950 dark:text-white">All wellness reports in one place.</h1>
-          <p className="mt-3 max-w-2xl text-base leading-7 text-slate-600 dark:text-slate-300">
-            Switch between the skin, physical, and mental reports, or compile a comprehensive holistic wellness overview.
-          </p>
-        </motion.div>
+    <div className="mx-auto max-w-6xl space-y-8 px-5 py-10 sm:px-8 lg:py-14">
+      <PageHeader
+        eyebrow="Reports"
+        title={
+          <>
+            Everything, <span className="italic text-ink-2">in one place.</span>
+          </>
+        }
+        description="Your latest report in each area, and a combined reading of how they relate."
+      />
 
-        {/* Comprehensive Wellness Report Section */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="glass overflow-hidden rounded-[2.5rem] border border-white/30 bg-gradient-to-br from-white/90 to-white/40 p-8 shadow-[0_32px_96px_rgba(15,23,42,0.12)] backdrop-blur-2xl dark:from-slate-950/80 dark:to-slate-950/20"
-        >
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-6 border-b border-slate-200 dark:border-slate-800">
-            <div className="space-y-1">
-              <div className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-emerald-600 dark:text-emerald-400">
-                <Sparkles className="h-4.5 w-4.5 animate-pulse" /> Comprehensive AI Synthesis
-              </div>
-              <h2 className="text-3xl font-black text-slate-950 dark:text-white">Holistic Wellness Report</h2>
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                Correlates data from all modules to generate target recommendations and risk alerts.
-              </p>
-            </div>
-            
-            <button
-              onClick={handleCompileReport}
-              disabled={isCompiling}
-              className="relative inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-6 py-4 text-sm font-bold text-white transition hover:scale-[1.02] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 dark:bg-white dark:text-slate-950"
-            >
-              {isCompiling ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>{compileStatus}</span>
-                </>
+      {/* Domain reports */}
+      <div className="grid gap-5 md:grid-cols-3">
+        {DOMAINS.map((d, i) => {
+          const r = latest?.[d.key];
+          return (
+            <motion.div key={d.key} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06, duration: 0.6, ease }}>
+              {latest === null ? (
+                <div className="skeleton h-64 rounded-[24px]" />
               ) : (
-                <>
-                  <Sparkles className="h-4 w-4 text-emerald-400" />
-                  <span>Compile AI Report</span>
-                </>
-              )}
-            </button>
-          </div>
-
-          {compileError && (
-            <div className="mt-6 rounded-2xl border border-rose-500/20 bg-rose-500/5 p-4 text-sm text-rose-700 dark:text-rose-300">
-              {compileError}
-            </div>
-          )}
-
-          <AnimatePresence mode="wait">
-            {combined ? (
-              <motion.div
-                key="report-content"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="mt-8 grid gap-8 lg:grid-cols-[1fr_1.8fr]"
-              >
-                {/* Left metrics column */}
-                <div className="space-y-6">
-                  <div className="rounded-3xl bg-slate-100/50 p-6 text-center dark:bg-slate-900/30">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Overall Health Score</span>
-                    <div className="mt-3 text-7xl font-black tracking-tighter text-emerald-500">{combined.overallHealthScore ?? "--"}{combined.overallHealthScore !== null ? "%" : ""}</div>
-                    <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{combined.scoreExplanation}</p>
+                <Link href={d.href} className="card group flex h-full flex-col p-6 transition hover:-translate-y-0.5 hover:shadow-float">
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-2.5 text-sm font-medium text-ink">
+                      <span
+                        className="flex h-8 w-8 items-center justify-center rounded-lg"
+                        style={{ background: `color-mix(in oklab, ${d.color} 13%, transparent)`, color: d.color }}
+                      >
+                        <d.icon className="h-4 w-4" />
+                      </span>
+                      {d.title}
+                    </span>
+                    <ArrowUpRight className="h-4 w-4 text-ink-3 transition group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-ink" />
                   </div>
-
-                  {/* Risks list */}
-                  {parsedRisks.length > 0 && (
-                    <div className="rounded-3xl border border-rose-500/20 bg-rose-500/5 p-6 space-y-3">
-                      <div className="flex items-center gap-2 text-rose-500 font-bold text-sm">
-                        <AlertTriangle className="h-4 w-4" /> Detected Risk Signals
+                  {r ? (
+                    <>
+                      <div className="mt-6 flex items-center gap-4">
+                        <ScoreRing value={r.score} size={76} stroke={7} color={d.color} />
+                        <div className="min-w-0">
+                          <p className="text-sm text-ink">{r.title}</p>
+                          <p className="text-xs text-ink-3">{fmt(r.createdAt)}</p>
+                        </div>
                       </div>
-                      <ul className="space-y-2 text-xs text-slate-600 dark:text-slate-300">
-                        {parsedRisks.map((risk, index) => (
-                          <li key={index} className="flex gap-2">
-                            <span>•</span>
-                            <span>{risk}</span>
-                          </li>
-                        ))}
-                      </ul>
+                      <p className="mt-5 line-clamp-3 text-sm leading-6 text-ink-2">{r.summary}</p>
+                      <p className="mt-auto pt-5 text-xs text-ink-3">{r.methodLabel}</p>
+                    </>
+                  ) : (
+                    <div className="mt-6 flex flex-1 flex-col">
+                      <p className="font-display text-2xl text-ink-3">No report yet</p>
+                      <p className="mt-2 text-sm text-ink-3">Create one to see it here.</p>
+                      <p className="mt-auto pt-6 text-sm font-medium" style={{ color: d.color }}>
+                        Start →
+                      </p>
                     </div>
                   )}
-                </div>
-
-                {/* Right detailed content column */}
-                <div className="space-y-8">
-                  {/* AI Insights text */}
-                  <div>
-                    <h3 className="text-xl font-bold text-slate-950 dark:text-white">AI Holistic Insights</h3>
-                    <p className="mt-3 text-base leading-7 text-slate-600 dark:text-slate-300 whitespace-pre-line">
-                      {combined.aiInsights}
-                    </p>
-                  </div>
-
-                  {/* Action Plan */}
-                  {parsedActionPlan.length > 0 && (
-                    <div className="space-y-4">
-                      <h3 className="text-xl font-bold text-slate-950 dark:text-white flex items-center gap-2">
-                        <CheckSquare className="h-5 w-5 text-emerald-500" /> Daily Focus Action Plan
-                      </h3>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        {parsedActionPlan.map((action, index) => (
-                          <div 
-                            key={index} 
-                            className="flex items-start gap-3 rounded-2xl bg-slate-100/50 p-4 dark:bg-slate-900/30 border border-slate-200/50 dark:border-slate-800/50"
-                          >
-                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-emerald-500/10 text-emerald-600 text-xs font-bold">
-                              {index + 1}
-                            </span>
-                            <span className="text-xs font-medium leading-relaxed text-slate-700 dark:text-slate-300">{action}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            ) : (
-              <motion.div
-                key="no-report"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="mt-12 text-center py-10"
-              >
-                <FileText className="mx-auto h-12 w-12 text-slate-300 dark:text-slate-700 mb-4" />
-                <h3 className="text-lg font-bold text-slate-950 dark:text-white">No Comprehensive Report Generated Yet</h3>
-                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
-                  Click the button above to run our holistic analysis engine and generate a wellness summary across all categories.
-                </p>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </motion.div>
-
-        {/* Modules Grid */}
-        <div className="grid gap-5 lg:grid-cols-3">
-          {reportCards.map((card, index) => {
-            const Icon = card.icon;
-            return (
-              <motion.div
-                key={card.title}
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.08 }}
-                className="group rounded-[2rem] border border-white/25 bg-white/80 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:bg-slate-950/40"
-              >
-                <div className={`inline-flex rounded-2xl bg-gradient-to-br ${card.accent} p-4 text-white shadow-lg shadow-slate-950/10`}>
-                  <Icon className="h-7 w-7" />
-                </div>
-                <h2 className="mt-5 text-2xl font-bold text-slate-950 dark:text-white">{card.title}</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{card.description}</p>
-                <Link href={card.href} className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-slate-950 transition group-hover:gap-3 dark:text-white">
-                  Open module <ArrowRight className="h-4 w-4" />
                 </Link>
-              </motion.div>
-            );
-          })}
+              )}
+            </motion.div>
+          );
+        })}
+      </div>
+
+      {/* Combined synthesis */}
+      <motion.section
+        initial={{ opacity: 0, y: 14 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.2, duration: 0.6, ease }}
+        className="card overflow-hidden p-0"
+      >
+        <div className="relative flex flex-col gap-6 border-b border-line p-6 sm:flex-row sm:items-center sm:justify-between sm:p-8">
+          <div className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full bg-aurora opacity-15 blur-3xl" />
+          <div className="relative">
+            <p className="eyebrow flex items-center gap-2">
+              <Sparkles className="h-3.5 w-3.5" /> Combined report
+            </p>
+            <h2 className="font-display mt-3 text-3xl text-ink sm:text-4xl">How it all connects</h2>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-ink-2">
+              An AI reads your latest reports together. The overall score is calculated by Saarthi — the AI only writes
+              the narrative.
+            </p>
+          </div>
+          <div className="relative shrink-0">
+            <Button variant="aurora" onClick={compile} disabled={compiling || !aiReady || available === 0}>
+              {compiling ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {compiling ? status : combined ? "Compile again" : "Compile report"}
+            </Button>
+          </div>
         </div>
 
-        {/* Individual Summary Scores */}
-        <div className="grid gap-5 lg:grid-cols-3">
-          {summaries.map((item, index) => (
-            <motion.div
-              key={item.label}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 + index * 0.06 }}
-              className="rounded-[2rem] border border-white/25 bg-white/80 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)] dark:bg-slate-950/40"
-            >
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-bold text-slate-950 dark:text-white">{item.label}</h3>
-                <Sparkles className="h-5 w-5 text-emerald-500" />
+        {!aiReady && (
+          <div className="flex items-start gap-3 border-b border-line bg-bg-elevated px-6 py-4 text-sm text-ink-2 sm:px-8">
+            <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+            AI synthesis isn&apos;t configured on this server yet (no language-model provider). Your skin, posture and mind
+            reports work without it.
+          </div>
+        )}
+
+        <AnimatePresence mode="wait">
+          {combined === undefined ? (
+            <div key="loading" className="p-8">
+              <div className="skeleton h-40" />
+            </div>
+          ) : combined ? (
+            <motion.div key={combined.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="grid grid-cols-1 gap-10 p-6 sm:p-8 lg:grid-cols-[0.8fr_1.6fr]">
+              <div className="space-y-6">
+                <div className="flex flex-col items-center rounded-3xl bg-bg-elevated p-6 text-center">
+                  <ScoreRing value={combined.overallHealthScore} size={140} gradient label="Overall" />
+                  <p className="mt-4 text-xs leading-5 text-ink-3">{combined.scoreExplanation}</p>
+                </div>
+                {combined.risks.length > 0 && (
+                  <div className="rounded-3xl border border-[color-mix(in_oklab,var(--warning)_30%,transparent)] bg-[color-mix(in_oklab,var(--warning)_7%,transparent)] p-5">
+                    <p className="flex items-center gap-2 text-sm font-medium text-ink">
+                      <TriangleAlert className="h-4 w-4 text-warning" /> Worth keeping an eye on
+                    </p>
+                    <ul className="mt-3 space-y-2 text-sm leading-6 text-ink-2">
+                      {combined.risks.map((r) => (
+                        <li key={r}>• {r}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
-              <div className="mt-4 text-4xl font-black text-slate-950 dark:text-white">{item.data ? `${item.data.score}%` : "--"}</div>
-              {item.data && <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{item.data.methodLabel}</p>}
-              <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {item.data?.summary ?? "No report saved yet. Open the module and generate one."}
+              <div className="space-y-8">
+                <div>
+                  <h3 className="text-sm font-semibold text-ink">Insights</h3>
+                  <p className="mt-3 whitespace-pre-line text-[1.02rem] leading-8 text-ink-2">{combined.aiInsights}</p>
+                </div>
+                {combined.actionPlan.length > 0 && (
+                  <div>
+                    <h3 className="flex items-center gap-2 text-sm font-semibold text-ink">
+                      <ListChecks className="h-4 w-4 text-ink-3" /> Action plan
+                    </h3>
+                    <ol className="mt-3 grid gap-3 sm:grid-cols-2">
+                      {combined.actionPlan.map((a, i) => (
+                        <li key={a} className="flex gap-3 rounded-2xl border border-line p-4">
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-aurora font-mono text-xs text-white">
+                            {i + 1}
+                          </span>
+                          <span className="text-sm leading-6 text-ink-2">{a}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+                <p className="text-xs text-ink-3">
+                  Generated {fmt(combined.generatedAt)}
+                  {combined.model ? ` · ${combined.model}` : ""}
+                </p>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="px-6 py-14 text-center">
+              <p className="font-display text-2xl text-ink">No combined report yet</p>
+              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-ink-2">
+                {available === 0
+                  ? "Create at least one skin, posture or mind report first."
+                  : "Compile one to see how your areas relate and get a single action plan."}
               </p>
             </motion.div>
-          ))}
-        </div>
-      </div>
+          )}
+        </AnimatePresence>
+      </motion.section>
     </div>
   );
 }

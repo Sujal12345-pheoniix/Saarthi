@@ -51,3 +51,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 ai-service/.venv/
+
+# development-only local photo storage
+/.data/

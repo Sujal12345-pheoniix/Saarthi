@@ -59,6 +59,8 @@ const rawSchema = z.object({
   CLOUDINARY_API_KEY: optionalString,
   CLOUDINARY_API_SECRET: optionalString,
   STORAGE_ALLOWED_HOSTS: csv,
+  /** Development only: folder for private photo storage when Cloudinary is not configured. */
+  LOCAL_STORAGE_DIR: optionalString,
 
   AI_SERVICE_URL: optionalUrl,
   AI_SERVICE_TOKEN: optionalString,
@@ -105,6 +107,11 @@ export interface ServerEnv {
   rateLimitEnabled: boolean;
   cloudinary?: { cloudName: string; apiKey: string; apiSecret: string };
   storageAllowedHosts: string[];
+  /**
+   * Development-only private file storage, used when Cloudinary is not configured. Never set outside
+   * NODE_ENV=development + APP_ENV=development.
+   */
+  localStorageDir?: string;
   aiService?: { url: string; token?: string; timeoutMs: number };
   llm: {
     provider: LlmProviderName;
@@ -285,6 +292,10 @@ export function parseEnv(source: Record<string, string | undefined>): ServerEnv 
     storageAllowedHosts: raw.STORAGE_ALLOWED_HOSTS.length
       ? raw.STORAGE_ALLOWED_HOSTS.map((h) => h.toLowerCase())
       : ["res.cloudinary.com", "api.cloudinary.com"],
+    localStorageDir:
+      raw.NODE_ENV === "development" && appEnv === "development" && !raw.CLOUDINARY_CLOUD_NAME
+        ? (raw.LOCAL_STORAGE_DIR ?? ".data/uploads")
+        : undefined,
     aiService: raw.AI_SERVICE_URL
       ? {
           url: raw.AI_SERVICE_URL.replace(/\/+$/, ""),
